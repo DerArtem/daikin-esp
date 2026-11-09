@@ -535,7 +535,11 @@ namespace esphome
     void DaikinClimate::setup()
     {
       ESP_LOGI(TAG, "DaikinClimate::setup() starting");
-      this->homebus_.register_callback(DaikinClimate::callback, this);
+      if (!this->sniffer_only_) {
+        this->homebus_.register_callback(DaikinClimate::callback, this);
+      } else {
+        ESP_LOGI(TAG, "Read-only P1/P2 sniffer: no climate responses will be sent");
+      }
       this->homebus_.setup();
       ESP_LOGI(TAG, "DaikinClimate::setup() complete");
     }
@@ -553,6 +557,11 @@ namespace esphome
 
     void DaikinClimate::control(const climate::ClimateCall &call)
     {
+      if (this->sniffer_only_) {
+        ESP_LOGW(TAG, "Ignoring control request in read-only sniffer mode");
+        return;
+      }
+
       if (call.get_fan_mode().has_value())
       {
         this->fan_mode = *call.get_fan_mode();
