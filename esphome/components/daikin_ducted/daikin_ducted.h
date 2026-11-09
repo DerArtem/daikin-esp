@@ -32,6 +32,10 @@ namespace esphome
          void set_rx_pin(uint8_t pin) { this->homebus_.set_rx_pin(pin); }
          void set_tx_pin(uint8_t pin) { this->homebus_.set_tx_pin(pin); }
          void set_enable_pin(uint8_t pin) { this->homebus_.set_enable_pin(pin); }
+         void set_sniffer_only(bool enabled) {
+            this->sniffer_only_ = enabled;
+            this->homebus_.set_sniffer_only(enabled);
+         }
 
       protected:
          static void callback(void *arg, const uint8_t buffer[], const uint32_t buffer_length);
@@ -42,6 +46,7 @@ namespace esphome
          void send_simple_response(uint8_t packet_type);
          void send_simple_response(uint8_t packet_type, const uint8_t *data, size_t data_len);
 
+         bool sniffer_only_{true};
          HomebusRMT homebus_;
 
          bool mode_updated = false;
