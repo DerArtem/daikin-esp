@@ -41,7 +41,7 @@ class EKHBHProfileFixturesTest(unittest.TestCase):
             "00 00 10", 20,
         )
         response_45 = valid_frame(
-            "40 00 10 01 00 01 00 2d 00 07 00 01 00 00 00 00 00 70 05 00 1f 01 a3 59",
+            "40 00 10 01 00 01 00 2d 00 07 00 01 00 00 00 00 00 70 05 00 1f 01 a3 6d",
             "40 00 10", 24,
         )
         self.assertEqual((request_40[6], request_40[7]), (40, 0))
