@@ -3,6 +3,7 @@
 #include "p1p2_pkt.h"
 
 #include <cstring>
+#include <cmath>
 
 namespace esphome
 {
@@ -524,6 +525,105 @@ namespace esphome
     }
 
     // ==========================================================================
+    // Passive EKHBH / early EWYQ P1/P2 protocol decoder
+    //
+    // Packet layouts verified against an EKHBH016AB6WN capture:
+    // 00 00 10 (20 bytes): heating setpoint at [6,7], cooling at [8,9].
+    // 40 00 10 (24 bytes): heating setpoint at [7,8], cooling at [9,10],
+    //                      outside temperature candidate at [17,18].
+    // 40 00 11 (10 bytes): status bits at [4], DHW temperature at [5,6],
+    //                      leaving water temperature at [7,8].
+    //
+    // This parser is registered ONLY when sniffer_only is true. It does
+    // not acknowledge, poll, or transmit on the P1/P2 bus.
+    // ==========================================================================
+    static float altherma_fixed_s8_8_le_(const uint8_t *data)
+    {
+      const uint16_t value = static_cast<uint16_t>(data[0]) |
+                             (static_cast<uint16_t>(data[1]) << 8);
+      return static_cast<float>(static_cast<int16_t>(value)) / 256.0f;
+    }
+
+    // Daikin setpoints use an integer byte and a separate decimal digit.
+    static float altherma_setpoint_(const uint8_t *data)
+    {
+      return static_cast<float>(data[0]) + (static_cast<float>(data[1]) / 10.0f);
+    }
+
+    static void altherma_publish_temperature_(sensor::Sensor *entity, float value)
+    {
+      if (entity != nullptr &&
+          (!entity->has_state() || std::fabs(entity->state - value) >= 0.02f))
+        entity->publish_state(value);
+    }
+
+    static void altherma_publish_binary_(binary_sensor::BinarySensor *entity, bool value)
+    {
+      if (entity != nullptr && (!entity->has_state() || entity->state != value))
+        entity->publish_state(value);
+    }
+
+    void DaikinClimate::altherma_sniffer_callback(void *arg, const uint8_t buffer[],
+                                                   const uint32_t buffer_length)
+    {
+      auto *self = static_cast<DaikinClimate *>(arg);
+      // Be defensive: the physical decoder can receive invalid/partial frames.
+      if (buffer_length < 4)
+        return;
+      if (calculate_crc(buffer, buffer_length - 1) != buffer[buffer_length - 1]) {
+        ESP_LOGW(TAG, "EKHBH frame with invalid CRC ignored (len=%lu)",
+                 static_cast<unsigned long>(buffer_length));
+        return;
+      }
+
+      if (buffer[1] != 0x00)  // only the indoor unit at address 0x00
+        return;
+
+      const uint8_t direction = buffer[0];
+      const uint8_t packet_type = buffer[2];
+
+      if (packet_type == 0x10) {
+        if (direction == 0x00 && buffer_length == 20) {
+          // Main controller, confirmed: 0x2D 0x00 = 45.0 degrees C.
+          if (buffer[7] <= 9) {
+            altherma_publish_temperature_(self->altherma_heating_setpoint_sensor_,
+                                          altherma_setpoint_(&buffer[6]));
+          }
+          if (buffer[9] <= 9) {
+            altherma_publish_temperature_(self->altherma_cooling_setpoint_sensor_,
+                                          altherma_setpoint_(&buffer[8]));
+          }
+        } else if (direction == 0x40 && buffer_length == 24) {
+          // Corresponding indoor-unit response.
+          if (buffer[8] <= 9) {
+            altherma_publish_temperature_(self->altherma_heating_setpoint_sensor_,
+                                          altherma_setpoint_(&buffer[7]));
+          }
+          if (buffer[10] <= 9) {
+            altherma_publish_temperature_(self->altherma_cooling_setpoint_sensor_,
+                                          altherma_setpoint_(&buffer[9]));
+          }
+          // Experimental: observed 0x0532 / 256 = 5.195 C near display 5.2 C.
+          altherma_publish_temperature_(self->altherma_outdoor_temperature_sensor_,
+                                        altherma_fixed_s8_8_le_(&buffer[17]));
+        }
+      } else if (packet_type == 0x11 && direction == 0x40 && buffer_length == 10) {
+        // Confirmed vs UI: 0x23C4 / 256 = 35.77 C DHW,
+        //                  0x257C / 256 = 37.48 C leaving water.
+        altherma_publish_temperature_(self->altherma_dhw_temperature_sensor_,
+                                      altherma_fixed_s8_8_le_(&buffer[5]));
+        altherma_publish_temperature_(self->altherma_flow_temperature_sensor_,
+                                      altherma_fixed_s8_8_le_(&buffer[7]));
+        // Observed transitions: 0x08 pump on, 0x00 both off,
+        // 0x09 pump + compressor on.
+        altherma_publish_binary_(self->altherma_circulation_pump_binary_sensor_,
+                                 (buffer[4] & 0x08) != 0);
+        altherma_publish_binary_(self->altherma_compressor_binary_sensor_,
+                                 (buffer[4] & 0x01) != 0);
+      }
+    }
+
+    // ==========================================================================
     // DaikinClimate Implementation
     // ==========================================================================
 
@@ -538,7 +638,9 @@ namespace esphome
       if (!this->sniffer_only_) {
         this->homebus_.register_callback(DaikinClimate::callback, this);
       } else {
-        ESP_LOGI(TAG, "Read-only P1/P2 sniffer: no climate responses will be sent");
+        // Unlike the original Ducted callback, this parser never sends frames.
+        this->homebus_.register_callback(DaikinClimate::altherma_sniffer_callback, this);
+        ESP_LOGI(TAG, "Read-only EKHBH sniffer/decoder: CRC-checked sensors, TX disabled");
       }
       this->homebus_.setup();
       ESP_LOGI(TAG, "DaikinClimate::setup() complete");
