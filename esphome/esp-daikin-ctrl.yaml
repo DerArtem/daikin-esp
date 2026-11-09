@@ -61,6 +61,8 @@ climate:
       name: "Altherma Vorlauftemperatur"
     altherma_dhw_temperature:
       name: "Altherma Brauchwassertemperatur"
+    altherma_dhw_setpoint:
+      name: "Altherma Brauchwasser Solltemperatur"
     altherma_outdoor_temperature:
       name: "Altherma Außentemperatur (experimentell)"
 
@@ -68,6 +70,14 @@ climate:
       name: "Altherma Umwälzpumpe"
     altherma_compressor:
       name: "Altherma Verdichter"
+
+    # These are controller enable flags, not proof of an active heating cycle.
+    altherma_heating_enabled:
+      name: "Altherma Heizbetrieb freigegeben"
+    altherma_dhw_enabled:
+      name: "Altherma Brauchwasserbereitung freigegeben"
+    altherma_quiet_mode:
+      name: "Altherma Flüstermodus"
 
     # Optionally enable if cooling is supported:
     # altherma_cooling_setpoint:
