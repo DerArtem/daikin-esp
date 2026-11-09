@@ -126,8 +126,8 @@ namespace esphome
 
             accumulator += symbol->duration1;
           }
-          // Pad out accumulator if we've timed out
-          if ((symbol_index == symbol_num) || (symbol->duration1 == 0))
+          // Pad out accumulator if we've reached the last symbol or timed out
+          if ((symbol_index == symbol_num - 1) || (symbol->duration1 == 0))
           {
             accumulator += HOMEBUS_BIT_DURATION * 11;
           }
