@@ -65,12 +65,16 @@ namespace esphome
 
          // Read-only EKHBH/EWYQ monitor entities. Separate from ducted AC controls.
          SUB_SENSOR(altherma_heating_setpoint);
+         SUB_SENSOR(altherma_dhw_setpoint);
          SUB_SENSOR(altherma_cooling_setpoint);
          SUB_SENSOR(altherma_flow_temperature);
          SUB_SENSOR(altherma_dhw_temperature);
          SUB_SENSOR(altherma_outdoor_temperature);
          SUB_BINARY_SENSOR(altherma_circulation_pump);
          SUB_BINARY_SENSOR(altherma_compressor);
+         SUB_BINARY_SENSOR(altherma_heating_enabled);
+         SUB_BINARY_SENSOR(altherma_dhw_enabled);
+         SUB_BINARY_SENSOR(altherma_quiet_mode);
 
          SUB_BINARY_SENSOR(filter_clean);
       };
