@@ -17,6 +17,9 @@ jobs:
       - name: Check out repo
         uses: actions/checkout@v6
 
+      - name: Check passive bus safety and captured frame fixtures
+        run: python3 -m unittest discover -s esphome/tests -p 'test_*.py'
+
       - name: Build firmware
         id: esphome-build
         uses: esphome/build-action@v7
