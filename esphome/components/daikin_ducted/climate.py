@@ -22,6 +22,7 @@ CONF_SNIFFER_ONLY = "sniffer_only"
 # Observed EKHBH/EWYQ packet profile (read-only).
 ALTHERMA_TEMPERATURE_SENSORS = {
     "altherma_heating_setpoint": "mdi:thermometer-chevron-up",
+    "altherma_dhw_setpoint": "mdi:water-thermometer",
     "altherma_cooling_setpoint": "mdi:thermometer-chevron-down",
     "altherma_flow_temperature": "mdi:thermometer-water",
     "altherma_dhw_temperature": "mdi:water-thermometer",
@@ -30,6 +31,9 @@ ALTHERMA_TEMPERATURE_SENSORS = {
 ALTHERMA_BINARY_SENSORS = {
     "altherma_circulation_pump": "mdi:water-pump",
     "altherma_compressor": "mdi:engine",
+    "altherma_heating_enabled": "mdi:radiator",
+    "altherma_dhw_enabled": "mdi:water-boiler",
+    "altherma_quiet_mode": "mdi:volume-off",
 }
 
 
