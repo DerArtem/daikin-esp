@@ -1,6 +1,6 @@
 # Read-only EKHBH / old EWYQ P1/P2 monitor
 
-This branch implements **passive P1/P2 reception and a first ESPHome sensor decoder** for an old Daikin EKHBH016AB6WN. Its frame structure matches the separately documented EWYQ005ADVP P1/P2 profile. It does **not** implement writing, polling, or active heat-pump control.
+This branch implements **passive P1/P2 reception and a first ESPHome sensor decoder** for an old Daikin EKHBH016AB6WN. Its frame structure matches the separately documented EWYQ005ADVP P1/P2 profile. A non-blocking **TX transport is included for future lab experiments**, but is NOT available in `sniffer_only: true` mode and there is no EKHBH-specific safe write/control implementation.
 
 ## Electrical safety
 
@@ -74,6 +74,51 @@ Known examples from the user's November 9, 2026 recordings:
 
 Offline frame-layout fixtures: `python -m unittest discover -s tests -p 'test_*.py'` from the `esphome` directory.
 
+## Upstream `dev` backports (November 2026)
+
+To keep individual sources auditable, each port was committed separately to
+`feature/altherma-read-only-sniffer` with the original upstream SHA in
+`Upstream-commit:` and an upstream URL. These are **manual, conflict-resolved
+backports**, not byte-identical Git `cherry-pick` operations: our component has
+additional read-only logic absent upstream.
+
+| Original `gregdavill/daikin-esp` commit | Applied change |
+| --- | --- |
+| [`36adade`](https://github.com/gregdavill/daikin-esp/commit/36adade797a1a71cade3ae12720654fd5a1566ef) | RMT final-symbol RX boundary fix (other bounds checks were already present) |
+| [`f3caa05`](https://github.com/gregdavill/daikin-esp/commit/f3caa05072e6f4f8765c878771c3cf3ebc8fe59f) | Limit device-name logging to frame length |
+| [`3222711`](https://github.com/gregdavill/daikin-esp/commit/32227111bd3b0ebe7af74d43cb32f6a0cb04ac81) | Size guard for optional active-mode response |
+| [`95a542d`](https://github.com/gregdavill/daikin-esp/commit/95a542dde0375f1222308089277153ce0c13176d) | GitHub Actions checkout v6 |
+| [`3a78a9d`](https://github.com/gregdavill/daikin-esp/commit/3a78a9d70f33599e44b12be41c71bc761c8702d4) | Async RMT TX queue, completion callback and 10ms guard delay |
+| [`9ae98fb`](https://github.com/gregdavill/daikin-esp/commit/9ae98fb215f1c5a7a57207b0aabbe4808ae27f8b) | GitHub Actions ESPHome 2026.10.2 |
+| [`0d9ddc8`](https://github.com/gregdavill/daikin-esp/commit/0d9ddc8db5e780f3d8c9508276dd0598b4d872cf) | Correct printf format specifiers in RMT diagnostics |
+| [`062d9c4`](https://github.com/gregdavill/daikin-esp/commit/062d9c497f980d107a42d1d79a4290d70fd1df7a) | `flash_mode: dio` and `flash_chip: generic`, adapted to ESP32-C6 |
+| [`107f588`](https://github.com/gregdavill/daikin-esp/commit/107f58835823574b6a002bfebb0fba7b1eca6c49) | Bounded TX wait applied to remaining active-mode idle setup |
+
+Additional local hardening: TX frame size/channel validation, reject active writes while
+queued/in progress, suppress TX queue processing in read-only mode, correct the
+TX-complete initialization race, validate length before parsing optional active
+controller frames, and bound diagnostic symbol dumps by actual symbol count.
+
+The old Ducted AC's AUTO/fan/mode control changes were **not** transplanted:
+they address a different P1/P2 packet family and would not make an EKHBH
+controller safe or functional.
+
+### Future TX development: important limitations
+
+- `sniffer_only: true` must stay enabled for current installations.
+  The MAX22088 is kept in reset / TX disabled (GPIO8 HIGH), and no TX RMT
+  channel, TX callback, or queued TX loop is enabled.
+- The asynchronous TX code is only a **transport foundation**, not a working
+  command protocol for this model. `sniffer_only: false` currently activates
+  the unrelated Ducted AC responder logic: **do not set it on the live heat pump**.
+- The upstream 10ms delay alone does **not** implement bus arbitration or
+  collision avoidance, nor response validation or command authorization.
+  Before transmitting anything, a separate explicitly controlled test mode,
+  model-specific request/response handling, and bench testing with an
+  isolated/disconnected bus interface are necessary.
+- Current GitHub CI runs recorded-frame tests and checks that passive mode
+  remains guarded; passing static checks is not equivalent to on-device testing.
+
 ## Update firmware (Windows PowerShell)
 
 ```powershell
@@ -102,7 +147,7 @@ During boot, check that the driver logs `READ-ONLY SNIFFER: MAX22088 RST held HI
 - This experimental profile is based on a small number of tests on **one EKHBH016AB6WN**. Other old Daikin models may have different field positions, status bits, or scaling.
 - `altherma_outdoor_temperature` is a **candidate** until verified at matching timestamps during further measurements.
 - `altherma_dhw_temperature` and `altherma_flow_temperature` were matched against one display reading; more independent comparisons are advisable.
-- No return water temperature mapping is established. No P1/P2 writing or control is implemented.
+- No return water temperature mapping is established. No validated EKHBH P1/P2 writing or control is implemented. The dormant active TX transport is not suitable for operation on this older device.
 - The four controller settings above are **read-only sensors** (not ESPHome switches). Changing these settings through Home Assistant remains unsupported and intentionally disabled.
 - The raw sniffer prints decoded bytes even if their CRC is bad; **the new HA decoder discards CRC-invalid frames**. Raw log transport can lag/drop under heavy load. Watch for RMT overflow warnings.
 - The changes require local compilation using your ESPHome 2026.10.2 toolchain and a real-device test; they have not been compiled by the GitHub editing environment.
