@@ -425,6 +425,7 @@ namespace esphome
     void DaikinClimate::callback(void *arg, const uint8_t buffer[], const uint32_t buffer_length)
     {
       DaikinClimate *self = static_cast<DaikinClimate *>(arg);
+      if (buffer_length < 4) return;  // Header and CRC must be present.
 
       // Validate CRC
       uint8_t received_crc = buffer[buffer_length - 1];
@@ -434,7 +435,7 @@ namespace esphome
       {
         ESP_LOGE(TAG, "CRC error: received 0x%02X, calculated 0x%02X (len=%lu)",
                  received_crc, calculated_crc, buffer_length);
-        ESP_LOG_BUFFER_HEXDUMP(TAG, buffer, 32, ESP_LOG_INFO);
+        ESP_LOG_BUFFER_HEXDUMP(TAG, buffer, buffer_length, ESP_LOG_INFO);
         return;
       }
 
@@ -507,14 +508,20 @@ namespace esphome
         }
 
         case PacketType::OUTDOOR_UNIT_NAME:
-          ESP_LOGI(TAG, "Outdoor unit name: %s", reinterpret_cast<const char *>(payload));
+        {
+          const int name_len = static_cast<int>(buffer_length - 4);
+          ESP_LOGI(TAG, "Outdoor unit name: %.*s", name_len, reinterpret_cast<const char *>(payload));
           self->send_simple_response(PacketType::OUTDOOR_UNIT_NAME);
           break;
+        }
 
         case PacketType::INDOOR_UNIT_NAME:
-          ESP_LOGI(TAG, "Indoor unit name: %s", reinterpret_cast<const char *>(payload));
+        {
+          const int name_len = static_cast<int>(buffer_length - 4);
+          ESP_LOGI(TAG, "Indoor unit name: %.*s", name_len, reinterpret_cast<const char *>(payload));
           self->send_simple_response(PacketType::INDOOR_UNIT_NAME);
           break;
+        }
 
         default:
           ESP_LOGVV(TAG, "Unhandled packet: dir=0x%02X addr=0x%02X type=0x%02X len=%lu",
