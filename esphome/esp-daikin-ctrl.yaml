@@ -5,8 +5,11 @@ esphome:
 
 esp32:
   variant: esp32c6
+  flash_mode: dio
   framework:
     type: esp-idf
+    advanced:
+      flash_chip: generic
 
 logger:
   level: DEBUG
