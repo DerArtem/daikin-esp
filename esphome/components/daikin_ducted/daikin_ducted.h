@@ -39,6 +39,7 @@ namespace esphome
 
       protected:
          static void callback(void *arg, const uint8_t buffer[], const uint32_t buffer_length);
+         static void altherma_sniffer_callback(void *arg, const uint8_t buffer[], const uint32_t buffer_length);
 
          void handle_temperature_packet(const uint8_t *buffer, bool is_response);
          void handle_control_packet(const uint8_t *payload);
@@ -61,6 +62,15 @@ namespace esphome
          SUB_SENSOR(indoor_temperature);
          SUB_SENSOR(outdoor_intake_temperature);
          SUB_SENSOR(coolant_temperature);
+
+         // Read-only EKHBH/EWYQ monitor entities. Separate from ducted AC controls.
+         SUB_SENSOR(altherma_heating_setpoint);
+         SUB_SENSOR(altherma_cooling_setpoint);
+         SUB_SENSOR(altherma_flow_temperature);
+         SUB_SENSOR(altherma_dhw_temperature);
+         SUB_SENSOR(altherma_outdoor_temperature);
+         SUB_BINARY_SENSOR(altherma_circulation_pump);
+         SUB_BINARY_SENSOR(altherma_compressor);
 
          SUB_BINARY_SENSOR(filter_clean);
       };
