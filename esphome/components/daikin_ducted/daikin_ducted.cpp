@@ -413,6 +413,10 @@ namespace esphome
     void DaikinClimate::send_simple_response(uint8_t packet_type, const uint8_t *data, size_t data_len)
     {
       uint8_t response[16] = {Direction::RESPONSE, Address::AUX_CONTROLLER, packet_type};
+      if (data_len > sizeof(response) - 4) {
+        ESP_LOGE(TAG, "Response too large: %zu bytes", data_len + 4);
+        return;
+      }
       memcpy(&response[3], data, data_len);
       response[3 + data_len] = 0xFF; // CRC placeholder
       finalize_and_send(this->homebus_, response, 3 + data_len + 1);
