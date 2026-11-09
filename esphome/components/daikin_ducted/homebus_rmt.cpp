@@ -397,7 +397,12 @@ namespace esphome
         tx_cfg.loop_count = 0;
         tx_cfg.flags.eot_level = 1;  // idle high
         rmt_transmit(this->tx_channel_, this->tx_encoder_, tx_items, sizeof(tx_items), &tx_cfg);
-        rmt_tx_wait_all_done(this->tx_channel_, portMAX_DELAY);
+        esp_err_t idle_tx_err = rmt_tx_wait_all_done(this->tx_channel_, pdMS_TO_TICKS(100));
+        if (idle_tx_err != ESP_OK) {
+          ESP_LOGE(TAG, "TX idle initialization failed: %s", esp_err_to_name(idle_tx_err));
+          this->mark_failed();
+          return;
+        }
 
 
       }
