@@ -528,9 +528,13 @@ namespace esphome
     // Passive EKHBH / early EWYQ P1/P2 protocol decoder
     //
     // Packet layouts verified against an EKHBH016AB6WN capture:
-    // 00 00 10 (20 bytes): heating setpoint at [6,7], cooling at [8,9].
-    // 40 00 10 (24 bytes): heating setpoint at [7,8], cooling at [9,10],
+    // 00 00 10 (20 bytes): payload[0] heating enabled, [2] DHW enabled,
+    //                      [3] heating target, [5] cooling target,
+    //                      [7] DHW target, [9] quiet mode.
+    // 40 00 10 (24 bytes): heating target at [7], cooling at [9],
     //                      outside temperature candidate at [17,18].
+    // These setpoints are whole degrees, *not* f8/8 pairs: the byte
+    // after the heating target is a mode flag, not its decimal part.
     // 40 00 11 (10 bytes): status bits at [4], DHW temperature at [5,6],
     //                      leaving water temperature at [7,8].
     //
@@ -544,10 +548,11 @@ namespace esphome
       return static_cast<float>(static_cast<int16_t>(value)) / 256.0f;
     }
 
-    // Daikin setpoints use an integer byte and a separate decimal digit.
-    static float altherma_setpoint_(const uint8_t *data)
+    // Observed target settings are whole degrees C.  The following byte
+    // may represent a distinct control mode and must not be used as tenths.
+    static float altherma_setpoint_(uint8_t whole_degrees)
     {
-      return static_cast<float>(data[0]) + (static_cast<float>(data[1]) / 10.0f);
+      return static_cast<float>(whole_degrees);
     }
 
     static void altherma_publish_temperature_(sensor::Sensor *entity, float value)
@@ -584,25 +589,33 @@ namespace esphome
 
       if (packet_type == 0x10) {
         if (direction == 0x00 && buffer_length == 20) {
-          // Main controller, confirmed: 0x2D 0x00 = 45.0 degrees C.
-          if (buffer[7] <= 9) {
-            altherma_publish_temperature_(self->altherma_heating_setpoint_sensor_,
-                                          altherma_setpoint_(&buffer[6]));
-          }
-          if (buffer[9] <= 9) {
-            altherma_publish_temperature_(self->altherma_cooling_setpoint_sensor_,
-                                          altherma_setpoint_(&buffer[8]));
-          }
+          // Read-only: controller's target settings and enable flags.
+          // Verified against seven isolated button changes in capture4:
+          // - DHW target [10]: 0x2D -> 0x32 -> 0x2D (45 -> 50 -> 45 C)
+          // - DHW enable [5]: 0x00 -> 0x01
+          // - Quiet mode [12]: 0x00 -> 0x01 -> 0x00
+          // - Heating enable [3]: 0x01 -> 0x00 -> 0x01
+          altherma_publish_temperature_(self->altherma_heating_setpoint_sensor_,
+                                        altherma_setpoint_(buffer[6]));
+          altherma_publish_temperature_(self->altherma_cooling_setpoint_sensor_,
+                                        altherma_setpoint_(buffer[8]));
+          altherma_publish_temperature_(self->altherma_dhw_setpoint_sensor_,
+                                        altherma_setpoint_(buffer[10]));
+
+          // These bits indicate controller enable/configuration states;
+          // they do not prove the corresponding function is actively running.
+          altherma_publish_binary_(self->altherma_heating_enabled_binary_sensor_,
+                                   (buffer[3] & 0x01) != 0);
+          altherma_publish_binary_(self->altherma_dhw_enabled_binary_sensor_,
+                                   (buffer[5] & 0x01) != 0);
+          altherma_publish_binary_(self->altherma_quiet_mode_binary_sensor_,
+                                   (buffer[12] & 0x01) != 0);
         } else if (direction == 0x40 && buffer_length == 24) {
           // Corresponding indoor-unit response.
-          if (buffer[8] <= 9) {
-            altherma_publish_temperature_(self->altherma_heating_setpoint_sensor_,
-                                          altherma_setpoint_(&buffer[7]));
-          }
-          if (buffer[10] <= 9) {
-            altherma_publish_temperature_(self->altherma_cooling_setpoint_sensor_,
-                                          altherma_setpoint_(&buffer[9]));
-          }
+          altherma_publish_temperature_(self->altherma_heating_setpoint_sensor_,
+                                        altherma_setpoint_(buffer[7]));
+          altherma_publish_temperature_(self->altherma_cooling_setpoint_sensor_,
+                                        altherma_setpoint_(buffer[9]));
           // Experimental: observed 0x0532 / 256 = 5.195 C near display 5.2 C.
           altherma_publish_temperature_(self->altherma_outdoor_temperature_sensor_,
                                         altherma_fixed_s8_8_le_(&buffer[17]));
