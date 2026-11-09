@@ -1,50 +1,92 @@
-# Read-only P1/P2 capture (Daikin Altherma experiment)
+# Read-only EKHBH / old EWYQ P1/P2 monitor
 
-This branch adds a fail-closed **read-only** mode to the existing ESPHome/ESP32-C6 driver. It is intended to capture and analyze frames from an older Daikin Altherma (EKHBH016AB6WN) **without sending** an auxiliary-controller handshake or any control packet.
+This branch implements **passive P1/P2 reception and a first ESPHome sensor decoder** for an old Daikin EKHBH016AB6WN. Its frame structure matches the separately documented EWYQ005ADVP P1/P2 profile. It does **not** implement writing, polling, or active heat-pump control.
 
-## Hardware / safety
+## Electrical safety
 
-* MAX22088 DOUT -> ESP32-C6 GPIO4; DIN <- GPIO5; MAX22088 RST (pin 3) <- GPIO8.
-* MAX22088 **RST must be HIGH** to inhibit the bus transmitter. In `sniffer_only: true` the firmware drives GPIO8 HIGH immediately during the Homebus setup, skips creation/enabling of the RMT TX channel and rejects calls to `write_bytes`. The climate callback is not registered.
-* Keep the existing **10 kOhm hardware pull-up from GPIO8 to 3.3 V**: it keeps RST HIGH during reset, boot, and before ESPHome setup. Verify HIGH at MAX22088 pin 3 with a multimeter before connecting P1/P2. A firmware setting cannot guarantee safety before boot.
-* Avoid connecting a grounded PC/USB cable simultaneously to the non-isolated P1/P2 circuit. Power supply / bus capacity and polarity should be verified against the board design and the equipment manual.
-* A capture program is not proof that the PCB is electrically safe or that frames will decode correctly. Do not issue Home Assistant climate commands while monitoring.
+- MAX22088 DOUT -> ESP32-C6 GPIO4; DIN <- GPIO5; RST (MAX22088 pin 3) <- GPIO8.
+- **RST HIGH disables the MAX22088 bus transmitter.** With `sniffer_only: true` the firmware drives GPIO8 HIGH, never initializes the RMT TX channel, blocks `write_bytes`, and uses a dedicated receive-only packet callback.
+- Retain the 10 kOhm **hardware pull-up** on GPIO8 to 3.3 V. Confirm HIGH at MAX22088 pin 3 across boot/reset before connecting the bus; firmware cannot protect the pin before initialization.
+- This circuit is **not galvanically isolated** from the heat pump bus. Do not attach a grounded USB-connected PC at the same time. Work on wiring with the system safely powered off.
+- Keep the original Daikin controller connected in parallel. Do not change `sniffer_only: true` while investigating this older system.
 
-## Install / capture
+## ESPHome/Home Assistant entities
 
-On Windows PowerShell, from your local checkout of **DerArtem/daikin-esp**:
+`esphome/esp-daikin-ctrl.yaml` demonstrates the following optional entities, exposed via the normal ESPHome API:
 
-```powershell
-git fetch origin
-git switch feature/altherma-read-only-sniffer
-cd esphome
-$env:ESPHOME_ESP_IDF_PREFIX = "C:\idf"
-esphome config esp-daikin-ctrl.yaml
-esphome run esp-daikin-ctrl.yaml --device 192.168.10.138
+| YAML key inside `climate: - platform: daikin_ducted` | Displayed meaning | Packet | Confidence |
+| --- | --- | --- | --- |
+| `altherma_heating_setpoint` | Heating water target | `00 00 10` / `40 00 10` | Verified by 40 -> 45 C setpoint change |
+| `altherma_flow_temperature` | Leaving water / flow temperature | `40 00 11`, bytes 7-8 | Compared with Daikin display (37.5 C) |
+| `altherma_dhw_temperature` | Domestic hot water temperature | `40 00 11`, bytes 5-6 | Compared with Daikin display (35.7 C) |
+| `altherma_outdoor_temperature` | Outside temperature | `40 00 10`, bytes 17-18 | Experimental: 5.195 C vs display ~5.2 C |
+| `altherma_circulation_pump` | Water circulation pump running | `40 00 11`, byte 4 bit 3 | Correlated with pump off/on at 23:09:56 / 23:10:58 |
+| `altherma_compressor` | Compressor running | `40 00 11`, byte 4 bit 0 | Correlated with compressor start ~23:10:58 |
+| `altherma_cooling_setpoint` | Cooling water target (optional) | `00 00 10` / `40 00 10` | Not independently checked; disabled in example |
+
+The `Daikin Ducted` climate entity is now `internal: true` in the example: it is an implementation container only, **not a usable thermostat**. Old Ducted/HomeKit entities and their unrelated temperature data have been removed from the example YAML.
+
+### Frame details
+
+- **Accepted only after matching CRC:** reflected CRC-8, polynomial `0xD9`, initial value 0, as already used by the driver.
+- **Strict lengths:** `00 00 10` must be 20 bytes; `40 00 10` 24 bytes; `40 00 11` 10 bytes. Other traffic is still available in the raw log, but is not decoded.
+- **Temperature encoding:** flow, DHW, outdoor candidate: signed *little-endian* 16-bit / 256. Heating setpoint: integer byte followed by separate tenths digit. CRC occupies the final byte and is not part of the payload.
+- **Binary status:** `0x08` = pump ON, compressor OFF; `0x00` = both OFF; `0x09` = pump + compressor ON in this observed unit.
+- Numeric entities publish on first valid update or meaningful change (at least 0.02 degrees C), rather than on every ~0.3 s frame. Binary sensors publish only on state changes.
+
+### Validation captures
+
+Known examples from the user's November 9, 2026 recordings:
+
+```text
+# 40 C target (0x28), request
+00 00 10 01 01 00 28 00 07 00 2D 00 00 00 00 00 00 46 0A 54
+# 45 C target (0x2D), request
+00 00 10 01 01 00 2D 00 07 00 2D 00 00 00 00 00 00 46 0A 61
+
+# Pump on, compressor off; DHW 35.765625 C, flow 37.484375 C
+40 00 11 07 08 C4 23 7C 25 4F
+# Both off
+40 00 11 07 00 C4 23 7C 25 EB
+# Pump and compressor on
+40 00 11 07 09 C4 23 FC 24 3A
 ```
 
-The example YAML uses `sniffer_only: true`, `rx_pin: 4`, `tx_pin: 5`, `enable_pin: 8`, ESP-IDF, and `logger.level: DEBUG`.
+Offline frame-layout fixtures: `python -m unittest discover -s tests -p 'test_*.py'` from the `esphome` directory.
 
-To save logs for offline analysis (replace IP if needed):
+## Update firmware (Windows PowerShell)
+
+```powershell
+cd C:\source\daikin-esp\esphome
+git switch feature/altherma-read-only-sniffer
+git pull --ff-only origin feature/altherma-read-only-sniffer
+$env:ESPHOME_ESP_IDF_PREFIX = "C:\idf"
+esphome config esp-daikin-ctrl.yaml
+esphome compile esp-daikin-ctrl.yaml
+esphome upload esp-daikin-ctrl.yaml --device 192.168.10.138
+esphome logs esp-daikin-ctrl.yaml --device 192.168.10.138
+```
+
+The example keeps `logger.logs.p1p2_sniffer: INFO`, which prints **two lines per raw frame** to help later analysis. To reduce Wi-Fi/ESPHome log load after validation, set `p1p2_sniffer: WARN` and reflash; the Home Assistant sensors will continue to work independently.
+
+For a raw capture:
 
 ```powershell
 esphome logs esp-daikin-ctrl.yaml --device 192.168.10.138 2>&1 | Tee-Object -FilePath p1p2-capture.txt
 ```
 
-Each decoded frame produces two `p1p2_sniffer` INFO lines:
-
-```text
-[I][p1p2_sniffer]: seq=1 ms=123456 len=... dir=0x00 addr=0x00 type=0x10
-[I][p1p2_sniffer]: len=... pkt=[00 00 10 ...]
-```
-
-`seq` and `ms` are local reception-processing order and ESP32 uptime milliseconds, respectively; logs also contain ESPHome timestamps. `pkt` includes raw bytes (including a trailing checksum byte if present) and has **not** been interpreted as Altherma measurements. Frame decoding uses the upstream RMT sampler; invalid/framing/parity failures are logged by `homebus` where detectable. High traffic may overrun the two-buffer receiver, so watch for `RX buffer overflow` and gaps.
-
-First record an idle baseline, then alter **one parameter at a time on the original Daikin controller**, noting the exact event time and change (e.g., setpoint up by 1 °C). Restore each parameter after the test. Compare packet sequences and payload changes before assigning any meaning to values. No on-bus writing is enabled in this branch's YAML.
+During boot, check that the driver logs `READ-ONLY SNIFFER: MAX22088 RST held HIGH, TX hardware not initialized`. With config logging enabled, `Mode: READ ONLY (TX disabled)` is also shown.
 
 ## Limitations
 
-* This change **does not** implement an Altherma-specific decoder or climate controls. The `Ducted AC` entities are retained for compatibility but will not show valid Altherma readings in read-only mode.
-* No CRC/checksum validation is applied by the sniffer; frames are recorded for analysis even if their checksums would differ from Greg Davill's Ducted-A/C algorithm.
-* ESPHome API log streaming may drop frames under heavy traffic. Inspect `homebus` errors and consider a local serial capture via an isolated test setup if needed.
-* This branch has not been hardware-validated on an EKHBH016AB6WN. Build and runtime behavior must be checked before attaching the heat pump.
+- This experimental profile is based on a small number of tests on **one EKHBH016AB6WN**. Other old Daikin models may have different field positions, status bits, or scaling.
+- `altherma_outdoor_temperature` is a **candidate** until verified at matching timestamps during further measurements.
+- `altherma_dhw_temperature` and `altherma_flow_temperature` were matched against one display reading; more independent comparisons are advisable.
+- No return water temperature mapping is established. No P1/P2 writing or control is implemented.
+- The raw sniffer prints decoded bytes even if their CRC is bad; **the new HA decoder discards CRC-invalid frames**. Raw log transport can lag/drop under heavy load. Watch for RMT overflow warnings.
+- The changes require local compilation using your ESPHome 2026.10.2 toolchain and a real-device test; they have not been compiled by the GitHub editing environment.
+
+### References
+
+- https://github.com/Arnold-n/P1P2MQTT/blob/master/doc/LogicalFormat/Daikin-protocol-EWYQ005ADVP.md
+- https://github.com/Arnold-n/P1P2MQTT/blob/master/doc/LogicalFormat/README-Daikin.md
