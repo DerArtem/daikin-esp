@@ -17,6 +17,7 @@ CONF_FILTER_CLEAN = "filter_clean"
 CONF_RX_PIN = "rx_pin"
 CONF_TX_PIN = "tx_pin"
 CONF_ENABLE_PIN = "enable_pin"
+CONF_SNIFFER_ONLY = "sniffer_only"
 
 AUTO_LOAD = ["binary_sensor", "climate", "fan", "sensor"]
 
@@ -30,6 +31,7 @@ CONFIG_SCHEMA = climate.climate_schema(DaikinClimate).extend(
         cv.Optional(CONF_RX_PIN, default=2): pins.internal_gpio_input_pin_number,
         cv.Optional(CONF_TX_PIN, default=3): pins.internal_gpio_output_pin_number,
         cv.Optional(CONF_ENABLE_PIN, default=10): pins.internal_gpio_output_pin_number,
+        cv.Optional(CONF_SNIFFER_ONLY, default=True): cv.boolean,
         cv.Optional("outdoor_intake_temperature"): sensor.sensor_schema(
             unit_of_measurement=UNIT_CELSIUS,
             icon=ICON_THERMOMETER,
@@ -75,6 +77,7 @@ async def to_code(config):
     cg.add(var.set_rx_pin(config[CONF_RX_PIN]))
     cg.add(var.set_tx_pin(config[CONF_TX_PIN]))
     cg.add(var.set_enable_pin(config[CONF_ENABLE_PIN]))
+    cg.add(var.set_sniffer_only(config[CONF_SNIFFER_ONLY]))
 
     for key, funcName in SENSOR_TYPES.items():
         if key in config:
