@@ -155,8 +155,11 @@ namespace esphome
           ESP_LOGE(TAG, "Bad Stop framing, %u (byte:0x%03x, idx=%u, len=%zu)", accumulator, decoded_byte, symbol_index, byte_pos);
           print_packet(decoded_bytes, byte_pos);
 
-          for(int i = 0; i < 18; i++)
-            ESP_LOGE(TAG, "  symbol[%u](dur0=%u, dur1=%u)", i, rmt_symbols[i].duration0, rmt_symbols[i].duration1);
+          // Only dump symbols that actually exist in the received buffer.
+          for (size_t i = 0; i < symbol_num && i < 18; i++)
+            ESP_LOGE(TAG, "  symbol[%zu](dur0=%u, dur1=%u)", i,
+                     static_cast<unsigned>(rmt_symbols[i].duration0),
+                     static_cast<unsigned>(rmt_symbols[i].duration1));
           return 0;
         }
         if ((__builtin_popcount(decoded_byte) & 1) == 0)
@@ -396,7 +399,13 @@ namespace esphome
         rmt_transmit_config_t tx_cfg = {};
         tx_cfg.loop_count = 0;
         tx_cfg.flags.eot_level = 1;  // idle high
-        rmt_transmit(this->tx_channel_, this->tx_encoder_, tx_items, sizeof(tx_items), &tx_cfg);
+        esp_err_t idle_start_err =
+            rmt_transmit(this->tx_channel_, this->tx_encoder_, tx_items, sizeof(tx_items), &tx_cfg);
+        if (idle_start_err != ESP_OK) {
+          ESP_LOGE(TAG, "TX idle initialization failed to start: %s", esp_err_to_name(idle_start_err));
+          this->mark_failed();
+          return;
+        }
         esp_err_t idle_tx_err = rmt_tx_wait_all_done(this->tx_channel_, pdMS_TO_TICKS(100));
         if (idle_tx_err != ESP_OK) {
           ESP_LOGE(TAG, "TX idle initialization failed: %s", esp_err_to_name(idle_tx_err));
