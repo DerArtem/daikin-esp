@@ -41,40 +41,37 @@ external_components:
 status_led:
     pin: GPIO18
 
+# Internal carrier for a passive P1/P2 bus monitor; it is NOT a controllable climate.
+# The following sensors are exposed separately to Home Assistant.
 climate:
   - platform: daikin_ducted
     id: daikin0
-    name: "Ducted AC"
+    name: "Altherma Protocol Monitor"
+    internal: true
 
-    # P1P2/Homebus interface
-    rx_pin:          # RX from MAX22088
-      number: 4
-      ignore_strapping_warning: true
-    tx_pin: 5        # TX to MAX22088
-    enable_pin: 8    # MAX22088 RST, HIGH disables TX
-    sniffer_only: true  # read-only: do not initialize TX or reply to polls
+    rx_pin: 4       # MAX22088 DOUT
+    tx_pin: 5       # MAX22088 DIN, never used in this mode
+    enable_pin: 8   # MAX22088 RST; HIGH disables bus transmitter
+    sniffer_only: true
 
-    homekit_climate:
-      name: "Ducted AC HomeKit"
+    # EKHBH016AB6WN / older EWYQ-profile (passive readback).
+    altherma_heating_setpoint:
+      name: "Altherma Heizwasser Solltemperatur"
+    altherma_flow_temperature:
+      name: "Altherma Vorlauftemperatur"
+    altherma_dhw_temperature:
+      name: "Altherma Brauchwassertemperatur"
+    altherma_outdoor_temperature:
+      name: "Altherma Außentemperatur (experimentell)"
 
-    homekit_fan:
-      name: "Ducted AC Fan"
+    altherma_circulation_pump:
+      name: "Altherma Umwälzpumpe"
+    altherma_compressor:
+      name: "Altherma Verdichter"
 
-    outdoor_intake_temperature:
-      name: "Outdoor Intake Temperature"
-      filters:
-        - throttle_average: 60s
-    coolant_temperature:
-      name: "Coolant Temperature"
-      filters:
-        - throttle_average: 60s
-    indoor_temperature:
-      name: "Indoor Temperature"
-      filters:
-        - throttle_average: 60s
-      
-    filter_clean:
-      name: "Filter Status"
+    # Optionally enable if cooling is supported:
+    # altherma_cooling_setpoint:
+    #   name: "Altherma Kühlwasser Solltemperatur"
 
 text_sensor:
   - platform: git_ref
