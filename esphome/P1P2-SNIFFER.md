@@ -17,6 +17,10 @@ This branch implements **passive P1/P2 reception and a first ESPHome sensor deco
 | YAML key inside `climate: - platform: daikin_ducted` | Displayed meaning | Packet | Confidence |
 | --- | --- | --- | --- |
 | `altherma_heating_setpoint` | Heating water target | `00 00 10` / `40 00 10` | Verified by 40 -> 45 C setpoint change |
+| `altherma_dhw_setpoint` | DHW target | `00 00 10`, payload byte 7 | Confirmed by 45 -> 50 -> 45 C |
+| `altherma_heating_enabled` | Space heating allowed by controller | `00 00 10`, payload byte 0 bit 0 | Confirmed by off -> on test |
+| `altherma_dhw_enabled` | DHW heating allowed by controller | `00 00 10`, payload byte 2 bit 0 | Confirmed by DHW on test |
+| `altherma_quiet_mode` | Quiet mode enabled by controller | `00 00 10`, payload byte 9 bit 0 | Confirmed by on -> off test |
 | `altherma_flow_temperature` | Leaving water / flow temperature | `40 00 11`, bytes 7-8 | Compared with Daikin display (37.5 C) |
 | `altherma_dhw_temperature` | Domestic hot water temperature | `40 00 11`, bytes 5-6 | Compared with Daikin display (35.7 C) |
 | `altherma_outdoor_temperature` | Outside temperature | `40 00 10`, bytes 17-18 | Experimental: 5.195 C vs display ~5.2 C |
@@ -30,9 +34,25 @@ The `Daikin Ducted` climate entity is now `internal: true` in the example: it is
 
 - **Accepted only after matching CRC:** reflected CRC-8, polynomial `0xD9`, initial value 0, as already used by the driver.
 - **Strict lengths:** `00 00 10` must be 20 bytes; `40 00 10` 24 bytes; `40 00 11` 10 bytes. Other traffic is still available in the raw log, but is not decoded.
-- **Temperature encoding:** flow, DHW, outdoor candidate: signed *little-endian* 16-bit / 256. Heating setpoint: integer byte followed by separate tenths digit. CRC occupies the final byte and is not part of the payload.
+- **Temperature encoding:** flow, DHW, outdoor candidate: signed *little-endian* 16-bit / 256. Heating and DHW targets: whole-degree byte, **not** tenths in the next byte (the byte after heating target is a distinct controller mode field). CRC occupies the final byte and is not part of the payload.
 - **Binary status:** `0x08` = pump ON, compressor OFF; `0x00` = both OFF; `0x09` = pump + compressor ON in this observed unit.
 - Numeric entities publish on first valid update or meaningful change (at least 0.02 degrees C), rather than on every ~0.3 s frame. Binary sensors publish only on state changes.
+
+### Seven confirmed control-panel actions (November 9, 2026)
+
+The latest capture (`p1p2-capture4.txt`) contains 3,705 CRC-valid frames over 23:52:00–23:55:14 with consecutive sequence numbers. All seven deliberate controller actions appear as isolated changes in the `00 00 10` request:
+
+| Time | Controller action | Payload offset, old -> new |
+| --- | --- | --- |
+| 23:52:13.192 | DHW target 45 -> 50 C | 7, `2D -> 32` |
+| 23:52:20.447 | DHW heating enabled | 2, `00 -> 01` |
+| 23:53:53.768 | DHW target 50 -> 45 C | 7, `32 -> 2D` |
+| 23:54:15.842 | Quiet mode enabled | 9, `00 -> 01` |
+| 23:54:37.081 | Quiet mode disabled | 9, `01 -> 00` |
+| 23:54:52.803 | Space heating disabled | 0, `01 -> 00` |
+| 23:55:03.724 | Space heating enabled | 0, `00 -> 01` |
+
+These flags indicate **controller settings / permission**, not necessarily actual pump, compressor, space-heating, or DHW activity. In the observed capture the compressor continued running while space heating was temporarily disabled, with DHW still permitted.
 
 ### Validation captures
 
@@ -83,6 +103,7 @@ During boot, check that the driver logs `READ-ONLY SNIFFER: MAX22088 RST held HI
 - `altherma_outdoor_temperature` is a **candidate** until verified at matching timestamps during further measurements.
 - `altherma_dhw_temperature` and `altherma_flow_temperature` were matched against one display reading; more independent comparisons are advisable.
 - No return water temperature mapping is established. No P1/P2 writing or control is implemented.
+- The four controller settings above are **read-only sensors** (not ESPHome switches). Changing these settings through Home Assistant remains unsupported and intentionally disabled.
 - The raw sniffer prints decoded bytes even if their CRC is bad; **the new HA decoder discards CRC-invalid frames**. Raw log transport can lag/drop under heavy load. Watch for RMT overflow warnings.
 - The changes require local compilation using your ESPHome 2026.10.2 toolchain and a real-device test; they have not been compiled by the GitHub editing environment.
 
