@@ -29,7 +29,7 @@ namespace esphome
     static constexpr uint32_t HOMEBUS_HALF_BIT_DURATION = HOMEBUS_BIT_DURATION / 2;
 
     // RX buffer size in symbols (enough for 32 bytes * 11 symbols/byte)
-    static constexpr size_t RX_BUFFER_SYMBOLS = 32 * 11;
+    static constexpr size_t RX_BUFFER_SYMBOLS = 48 * 11;
 
     /*
 
@@ -75,7 +75,7 @@ namespace esphome
         *p++ = ']';
       }
       *p = 0;
-      ESP_LOGVV(TAG, "%s", str);
+      ESP_LOGI("p1p2_sniffer", "%s", str);
     }
 
     static int homebus_rmt_decode_data(rmt_symbol_word_t *rmt_symbols, size_t symbol_num, uint8_t *decoded_bytes, size_t max_buffer_length)
@@ -92,7 +92,7 @@ namespace esphome
         size_t bit_pos = 0;
         while (sampling_time < (HOMEBUS_BIT_DURATION * (11)))
         {
-          if (symbol_index > symbol_num)
+          if (symbol_index >= symbol_num)
           {
             ESP_LOGE(TAG, "Invalid symbol index %lu > %lu", symbol_index, symbol_num);
             ESP_LOGE(TAG, "byte_pos = %lu, bit_pos = %lu, accumulator = %lu", byte_pos, bit_pos, accumulator);
@@ -102,7 +102,7 @@ namespace esphome
 
           rmt_symbol_word_t *symbol = &rmt_symbols[symbol_index];
 
-          if ((symbol_index <= symbol_num))
+          if ((symbol_index < symbol_num))
           {
 
             if (symbol->duration0 > (HOMEBUS_BIT_DURATION * (11)))
@@ -165,13 +165,11 @@ namespace esphome
         }
 
         decoded_byte >>= 1;
-        decoded_bytes[byte_pos] = decoded_byte;
-
-        if (++byte_pos >= max_buffer_length)
-        {
-          ESP_LOGE(TAG, "Over max length: %lu > %lu", byte_pos, max_buffer_length);
+        if (byte_pos >= max_buffer_length) {
+          ESP_LOGE(TAG, "RX frame exceeds %u bytes", static_cast<unsigned>(max_buffer_length));
           return 0;
         }
+        decoded_bytes[byte_pos++] = decoded_byte;
       }
       return byte_pos;
     }
@@ -496,7 +494,7 @@ namespace esphome
 
       // Process received data from the completed buffer
       uint8_t buffer[48] = {0};
-      size_t decoded_size = homebus_rmt_decode_data(this->store_.buffers[ready_idx], num_symbols, buffer, 32);
+      size_t decoded_size = homebus_rmt_decode_data(this->store_.buffers[ready_idx], num_symbols, buffer, sizeof(buffer));
 
       // Filter for potential noise/invalid packets. We need at least the header present
       if (decoded_size < 3)
