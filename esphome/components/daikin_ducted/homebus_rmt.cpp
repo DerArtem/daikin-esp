@@ -251,6 +251,25 @@ namespace esphome
     void HomebusRMT::setup()
     {
       ESP_LOGCONFIG(TAG, "Setting up Homebus...");
+      // MAX22088 RST is active low for transmission. HIGH disables TX.
+      // Set the safe level before RMT configuration or any allocation.
+      gpio_num_t enable_gpio = static_cast<gpio_num_t>(this->enable_pin_);
+      gpio_set_level(enable_gpio, 1);
+      gpio_config_t enable_conf = {};
+      enable_conf.pin_bit_mask = 1ULL << this->enable_pin_;
+      enable_conf.mode = GPIO_MODE_OUTPUT;
+      enable_conf.pull_up_en = GPIO_PULLUP_ENABLE;
+      enable_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+      enable_conf.intr_type = GPIO_INTR_DISABLE;
+      if (gpio_config(&enable_conf) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to configure MAX22088 RST GPIO");
+        this->mark_failed();
+        return;
+      }
+      gpio_set_level(enable_gpio, 1);
+      if (this->sniffer_only_) {
+        ESP_LOGW(TAG, "READ-ONLY SNIFFER: MAX22088 RST held HIGH, TX hardware not initialized");
+      }
 
       // Allocate RX buffers
       for (int i = 0; i < 2; i++) {
@@ -299,48 +318,6 @@ namespace esphome
         return;
       }
 
-      // Configure TX channel
-      rmt_tx_channel_config_t tx_config = {};
-      tx_config.clk_src = RMT_CLK_SRC_DEFAULT;
-      tx_config.resolution_hz = HOMEBUS_RMT_RESOLUTION_HZ;
-      tx_config.mem_block_symbols = 64;
-      tx_config.gpio_num = static_cast<gpio_num_t>(this->tx_pin_);
-      tx_config.trans_queue_depth = 1;
-      tx_config.flags.invert_out = 0;
-      tx_config.flags.io_od_mode = false;
-      tx_config.flags.io_loop_back = false;
-
-      error = rmt_new_tx_channel(&tx_config, &this->tx_channel_);
-      if (error != ESP_OK)
-      {
-        ESP_LOGE(TAG, "Failed to create TX channel: %s", esp_err_to_name(error));
-        this->mark_failed();
-        return;
-      }
-
-      // Create copy encoder for raw symbol transmission
-      rmt_copy_encoder_config_t encoder_config = {};
-      error = rmt_new_copy_encoder(&encoder_config, &this->tx_encoder_);
-      if (error != ESP_OK)
-      {
-        ESP_LOGE(TAG, "Failed to create TX encoder: %s", esp_err_to_name(error));
-        this->mark_failed();
-        return;
-      }
-
-      // Configure enable pin as output (enable pin for transceiver)
-      gpio_num_t enable_gpio = static_cast<gpio_num_t>(this->enable_pin_);
-      gpio_config_t conf = {
-          .pin_bit_mask = 1ULL << this->enable_pin_,
-          .mode = GPIO_MODE_OUTPUT,
-          .pull_up_en = GPIO_PULLUP_DISABLE,
-          .pull_down_en = GPIO_PULLDOWN_DISABLE,
-          .intr_type = GPIO_INTR_DISABLE};
-
-      gpio_config(&conf);
-      gpio_set_direction(enable_gpio, GPIO_MODE_OUTPUT);
-
-      // Enable both channels
       error = rmt_enable(this->rx_channel_);
       if (error != ESP_OK)
       {
@@ -349,37 +326,77 @@ namespace esphome
         return;
       }
 
-      error = rmt_enable(this->tx_channel_);
-      if (error != ESP_OK)
-      {
-        ESP_LOGE(TAG, "Failed to enable TX channel: %s", esp_err_to_name(error));
-        this->mark_failed();
-        return;
+      if (!this->sniffer_only_) {
+        // Configure TX channel
+        rmt_tx_channel_config_t tx_config = {};
+        tx_config.clk_src = RMT_CLK_SRC_DEFAULT;
+        tx_config.resolution_hz = HOMEBUS_RMT_RESOLUTION_HZ;
+        tx_config.mem_block_symbols = 64;
+        tx_config.gpio_num = static_cast<gpio_num_t>(this->tx_pin_);
+        tx_config.trans_queue_depth = 1;
+        tx_config.flags.invert_out = 0;
+        tx_config.flags.io_od_mode = false;
+        tx_config.flags.io_loop_back = false;
+
+        error = rmt_new_tx_channel(&tx_config, &this->tx_channel_);
+        if (error != ESP_OK)
+        {
+          ESP_LOGE(TAG, "Failed to create TX channel: %s", esp_err_to_name(error));
+          this->mark_failed();
+          return;
+        }
+
+        // Create copy encoder for raw symbol transmission
+        rmt_copy_encoder_config_t encoder_config = {};
+        error = rmt_new_copy_encoder(&encoder_config, &this->tx_encoder_);
+        if (error != ESP_OK)
+        {
+          ESP_LOGE(TAG, "Failed to create TX encoder: %s", esp_err_to_name(error));
+          this->mark_failed();
+          return;
+        }
+
+        // Enable both channels
+        error = rmt_enable(this->tx_channel_);
+        if (error != ESP_OK)
+        {
+          ESP_LOGE(TAG, "Failed to enable TX channel: %s", esp_err_to_name(error));
+          this->mark_failed();
+          return;
+        }
+
+        // Transmit dummy byte to initialize TX line high
+        rmt_symbol_word_t tx_items[1] = {};
+        tx_items[0].duration0 = HOMEBUS_BIT_DURATION * 12;
+        tx_items[0].level0 = 1;
+        tx_items[0].duration1 = 1;
+        tx_items[0].level1 = 1;
+
+        rmt_transmit_config_t tx_cfg = {};
+        tx_cfg.loop_count = 0;
+        tx_cfg.flags.eot_level = 1;  // idle high
+        rmt_transmit(this->tx_channel_, this->tx_encoder_, tx_items, sizeof(tx_items), &tx_cfg);
+        rmt_tx_wait_all_done(this->tx_channel_, portMAX_DELAY);
+
+
       }
-
-      // Transmit dummy byte to initialize TX line high
-      rmt_symbol_word_t tx_items[1] = {};
-      tx_items[0].duration0 = HOMEBUS_BIT_DURATION * 12;
-      tx_items[0].level0 = 1;
-      tx_items[0].duration1 = 1;
-      tx_items[0].level1 = 1;
-
-      rmt_transmit_config_t tx_cfg = {};
-      tx_cfg.loop_count = 0;
-      tx_cfg.flags.eot_level = 1;  // idle high
-      rmt_transmit(this->tx_channel_, this->tx_encoder_, tx_items, sizeof(tx_items), &tx_cfg);
-      rmt_tx_wait_all_done(this->tx_channel_, portMAX_DELAY);
 
       // Start receiving
       this->start_receive_();
 
-      gpio_set_level(enable_gpio, 0);
+      if (!this->sniffer_only_) {
+        gpio_set_level(enable_gpio, 0);  // active low: transmitter enabled only in control mode
+      }
 
       ESP_LOGCONFIG(TAG, "Homebus setup complete");
     }
 
     void HomebusRMT::write_bytes(const uint8_t *tx_data, uint8_t tx_data_size)
     {
+      if (this->sniffer_only_) {
+        ESP_LOGE(TAG, "Blocked TX attempt in read-only sniffer mode");
+        return;
+      }
       if (this->is_failed())
         return;
 
@@ -451,6 +468,7 @@ namespace esphome
       ESP_LOGCONFIG(TAG, "  RX Pin: GPIO%d", this->rx_pin_);
       ESP_LOGCONFIG(TAG, "  TX Pin: GPIO%d", this->tx_pin_);
       ESP_LOGCONFIG(TAG, "  Enable Pin: GPIO%d", this->enable_pin_);
+      ESP_LOGCONFIG(TAG, "  Mode: %s", this->sniffer_only_ ? "READ ONLY (TX disabled)" : "CONTROL (TX enabled)");
     }
 
     void HomebusRMT::loop()
@@ -484,6 +502,14 @@ namespace esphome
       if (decoded_size < 3)
         return;
 
+      // Packet lines include the local millis timestamp supplied by ESPHome
+      // and a monotonically increasing frame counter for offline correlation.
+      static uint32_t packet_sequence = 0;
+      ESP_LOGI("p1p2_sniffer", "seq=%lu ms=%lu len=%u dir=0x%02X addr=0x%02X type=0x%02X",
+               static_cast<unsigned long>(++packet_sequence),
+               static_cast<unsigned long>(millis()),
+               static_cast<unsigned int>(decoded_size),
+               buffer[0], buffer[1], buffer[2]);
       print_packet(buffer, decoded_size);
 
       // Pass buffer up stack
