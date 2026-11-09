@@ -19,6 +19,20 @@ CONF_TX_PIN = "tx_pin"
 CONF_ENABLE_PIN = "enable_pin"
 CONF_SNIFFER_ONLY = "sniffer_only"
 
+# Observed EKHBH/EWYQ packet profile (read-only).
+ALTHERMA_TEMPERATURE_SENSORS = {
+    "altherma_heating_setpoint": "mdi:thermometer-chevron-up",
+    "altherma_cooling_setpoint": "mdi:thermometer-chevron-down",
+    "altherma_flow_temperature": "mdi:thermometer-water",
+    "altherma_dhw_temperature": "mdi:water-thermometer",
+    "altherma_outdoor_temperature": "mdi:thermometer",
+}
+ALTHERMA_BINARY_SENSORS = {
+    "altherma_circulation_pump": "mdi:water-pump",
+    "altherma_compressor": "mdi:engine",
+}
+
+
 AUTO_LOAD = ["binary_sensor", "climate", "fan", "sensor"]
 
 daikin_ns = cg.esphome_ns.namespace("daikin_ducted")
@@ -32,6 +46,20 @@ CONFIG_SCHEMA = climate.climate_schema(DaikinClimate).extend(
         cv.Optional(CONF_TX_PIN, default=3): pins.internal_gpio_output_pin_number,
         cv.Optional(CONF_ENABLE_PIN, default=10): pins.internal_gpio_output_pin_number,
         cv.Optional(CONF_SNIFFER_ONLY, default=True): cv.boolean,
+        **{
+            cv.Optional(key): sensor.sensor_schema(
+                unit_of_measurement=UNIT_CELSIUS,
+                accuracy_decimals=1,
+                device_class=DEVICE_CLASS_TEMPERATURE,
+                state_class=STATE_CLASS_MEASUREMENT,
+                icon=icon,
+            )
+            for key, icon in ALTHERMA_TEMPERATURE_SENSORS.items()
+        },
+        **{
+            cv.Optional(key): binary_sensor.binary_sensor_schema(icon=icon)
+            for key, icon in ALTHERMA_BINARY_SENSORS.items()
+        },
         cv.Optional("outdoor_intake_temperature"): sensor.sensor_schema(
             unit_of_measurement=UNIT_CELSIUS,
             icon=ICON_THERMOMETER,
@@ -83,6 +111,16 @@ async def to_code(config):
         if key in config:
             sens = await sensor.new_sensor(config[key])
             cg.add(getattr(var, funcName)(sens))
+
+    for key in ALTHERMA_TEMPERATURE_SENSORS:
+        if key in config:
+            sens = await sensor.new_sensor(config[key])
+            cg.add(getattr(var, "set_" + key + "_sensor")(sens))
+
+    for key in ALTHERMA_BINARY_SENSORS:
+        if key in config:
+            bsens = await binary_sensor.new_binary_sensor(config[key])
+            cg.add(getattr(var, "set_" + key + "_binary_sensor")(bsens))
 
     if CONF_FILTER_CLEAN in config:
         sens = await binary_sensor.new_binary_sensor(config[CONF_FILTER_CLEAN])
