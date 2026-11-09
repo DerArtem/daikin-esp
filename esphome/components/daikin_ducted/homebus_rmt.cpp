@@ -210,6 +210,16 @@ namespace esphome
       return false;  // No high priority task woken
     }
 
+    // TX hardware is absent when sniffer_only=true.
+    static bool IRAM_ATTR rmt_tx_done_callback(rmt_channel_handle_t channel,
+                                                const rmt_tx_done_event_data_t *edata,
+                                                void *user_data)
+    {
+      volatile bool *tx_complete = static_cast<volatile bool *>(user_data);
+      *tx_complete = true;
+      return false;
+    }
+
     HomebusRMT::~HomebusRMT()
     {
       if (this->tx_encoder_ != nullptr) {
@@ -344,6 +354,18 @@ namespace esphome
           return;
         }
 
+        // TX callback is registered only in explicitly enabled control mode.
+        rmt_tx_event_callbacks_t tx_cbs = {};
+        tx_cbs.on_trans_done = rmt_tx_done_callback;
+        error = rmt_tx_register_event_callbacks(this->tx_channel_, &tx_cbs,
+                                                const_cast<bool *>(&this->tx_complete_));
+        if (error != ESP_OK)
+        {
+          ESP_LOGE(TAG, "Failed to register TX callback: %s", esp_err_to_name(error));
+          this->mark_failed();
+          return;
+        }
+
         // Create copy encoder for raw symbol transmission
         rmt_copy_encoder_config_t encoder_config = {};
         error = rmt_new_copy_encoder(&encoder_config, &this->tx_encoder_);
@@ -397,6 +419,19 @@ namespace esphome
       }
       if (this->is_failed())
         return;
+      if (tx_data == nullptr || tx_data_size == 0 || tx_data_size > MAX_TX_BYTES) {
+        ESP_LOGE(TAG, "Invalid TX frame size: %u (max %zu)",
+                 static_cast<unsigned>(tx_data_size), MAX_TX_BYTES);
+        return;
+      }
+      if (this->tx_channel_ == nullptr || this->tx_encoder_ == nullptr) {
+        ESP_LOGE(TAG, "TX channel not initialized");
+        return;
+      }
+      if (this->tx_pending_ || this->tx_in_progress_) {
+        ESP_LOGW(TAG, "TX busy, dropping packet");
+        return;
+      }
 
       rmt_symbol_word_t *tx_symbols = this->rmt_tx_buffer_;
 
@@ -439,25 +474,10 @@ namespace esphome
         tx_symbols[symbol_index++] = homebus_bit1_symbol;
       }
 
-      delay(10);
-
-      rmt_transmit_config_t tx_cfg = {};
-      tx_cfg.loop_count = 0;
-      tx_cfg.flags.eot_level = 1;  // idle high
-
-      esp_err_t err = rmt_transmit(this->tx_channel_, this->tx_encoder_,
-                                    this->rmt_tx_buffer_,
-                                    tx_data_size * 11 * sizeof(rmt_symbol_word_t),
-                                    &tx_cfg);
-      if (err != ESP_OK) {
-        ESP_LOGE(TAG, "TX transmit failed: %s", esp_err_to_name(err));
-        return;
-      }
-
-      err = rmt_tx_wait_all_done(this->tx_channel_, portMAX_DELAY);
-      if (err != ESP_OK) {
-        ESP_LOGE(TAG, "TX wait failed: %s", esp_err_to_name(err));
-      }
+      // Queue the complete frame; receive processing continues during guard time.
+      this->tx_pending_symbols_ = static_cast<size_t>(tx_data_size) * SYMBOLS_PER_BYTE;
+      this->tx_queued_at_ = millis();
+      this->tx_pending_ = true;
     }
 
     void HomebusRMT::dump_config()
@@ -473,6 +493,38 @@ namespace esphome
     {
       if (this->is_failed())
         return;
+
+      // TX is deliberately gated: no TX channel is created in sniffer mode.
+      if (!this->sniffer_only_) {
+        if (this->tx_in_progress_ && this->tx_complete_) {
+          this->tx_in_progress_ = false;
+          this->tx_complete_ = false;
+        }
+
+        if (this->tx_pending_ && !this->tx_in_progress_ &&
+            static_cast<uint32_t>(millis() - this->tx_queued_at_) >= TX_GUARD_DELAY_MS) {
+          if (this->tx_channel_ == nullptr || this->tx_encoder_ == nullptr) {
+            ESP_LOGE(TAG, "TX hardware unavailable, dropping queued packet");
+          } else {
+            rmt_transmit_config_t tx_cfg = {};
+            tx_cfg.loop_count = 0;
+            tx_cfg.flags.eot_level = 1;  // idle high
+
+            // Clear BEFORE rmt_transmit, avoiding a missed fast completion.
+            this->tx_complete_ = false;
+            esp_err_t err = rmt_transmit(this->tx_channel_, this->tx_encoder_,
+                                         this->rmt_tx_buffer_,
+                                         this->tx_pending_symbols_ * sizeof(rmt_symbol_word_t),
+                                         &tx_cfg);
+            if (err != ESP_OK) {
+              ESP_LOGE(TAG, "TX transmit failed: %s", esp_err_to_name(err));
+            } else {
+              this->tx_in_progress_ = true;
+            }
+          }
+          this->tx_pending_ = false;
+        }
+      }
 
       if (this->store_.overflow) {
         ESP_LOGW(TAG, "RX buffer overflow");
