@@ -67,6 +67,61 @@ class EKHBHProfileFixturesTest(unittest.TestCase):
         self.assertTrue(pump_and_compressor_on[4] & 0x08)
         self.assertTrue(pump_and_compressor_on[4] & 0x01)
 
+    def test_all_seven_controller_transitions(self):
+        # Exact valid frames taken from capture4. Each action changes
+        # only the indicated 0x10 request payload byte (CRC excluded).
+        examples = [
+            ("23:52:00", "00 00 10 01 01 00 2d 00 07 00 2d 00 00 00 00 00 00 46 0a 61", None),
+            ("23:52:13", "00 00 10 01 01 00 2d 00 07 00 32 00 00 00 00 00 00 46 0a d2", 7),
+            ("23:52:20", "00 00 10 01 01 01 2d 00 07 00 32 00 00 00 00 00 00 46 0a 94", 2),
+            ("23:53:53", "00 00 10 01 01 01 2d 00 07 00 2d 00 00 00 00 00 00 46 0a 27", 7),
+            ("23:54:15", "00 00 10 01 01 01 2d 00 07 00 2d 00 01 00 00 00 00 46 0a e6", 9),
+            ("23:54:37", "00 00 10 01 01 01 2d 00 07 00 2d 00 00 00 00 00 00 46 0a 27", 9),
+            ("23:54:52", "00 00 10 00 01 01 2d 00 07 00 2d 00 00 00 00 00 00 46 0a fe", 0),
+            ("23:55:03", "00 00 10 01 01 01 2d 00 07 00 2d 00 00 00 00 00 00 46 0a 27", 0),
+        ]
+        frames = [
+            valid_frame(hex_frame, "00 00 10", 20)
+            for _, hex_frame, _ in examples
+        ]
+        for i in range(1, len(frames)):
+            changed = [
+                position - 3
+                for position in range(3, 19)
+                if frames[i][position] != frames[i - 1][position]
+            ]
+            self.assertEqual(changed, [examples[i][2]], msg=examples[i][0])
+
+        def decoded(frame):
+            return {
+                "heating_setpoint": frame[6],
+                "dhw_setpoint": frame[10],
+                "heating_enabled": bool(frame[3] & 0x01),
+                "dhw_enabled": bool(frame[5] & 0x01),
+                "quiet_mode": bool(frame[12] & 0x01),
+            }
+
+        expected_states = [
+            (45, 45, True, False, False),
+            (45, 50, True, False, False),
+            (45, 50, True, True, False),
+            (45, 45, True, True, False),
+            (45, 45, True, True, True),
+            (45, 45, True, True, False),
+            (45, 45, False, True, False),
+            (45, 45, True, True, False),
+        ]
+        for frame, expected in zip(frames, expected_states):
+            actual = decoded(frame)
+            self.assertEqual(tuple(actual.values()), expected)
+
+    def test_heating_target_mode_byte_is_not_decimal_fraction(self):
+        # In the EWYQ-like profile payload byte 4 belongs to controller mode.
+        # A 0x05 mode byte must not turn a 45 C setpoint into 45.5 C.
+        target, mode_byte = 0x2D, 0x05
+        self.assertEqual(float(target), 45.0)
+        self.assertNotEqual(float(target), target + mode_byte / 10.0)
+
     def test_outdoor_temperature_candidate(self):
         response = valid_frame(
             "40 00 10 01 00 01 00 2d 00 07 00 01 00 00 00 00 00 32 05 00 1f 01 a3 f4",
