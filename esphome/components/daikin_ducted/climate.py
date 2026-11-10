@@ -28,9 +28,15 @@ ALTHERMA_TEMPERATURE_SENSORS = {
     "altherma_dhw_temperature": "mdi:water-thermometer",
     "altherma_outdoor_temperature": "mdi:thermometer",
 }
+# Numeric raw diagnostic bytes: not decoded modes or heater-stage states.
+ALTHERMA_DIAGNOSTIC_SENSORS = {
+    "altherma_heating_control_mode_raw": "mdi:weather-partly-cloudy",
+    "altherma_status_flags_raw": "mdi:code-braces",
+}
 ALTHERMA_BINARY_SENSORS = {
     "altherma_circulation_pump": "mdi:water-pump",
     "altherma_compressor": "mdi:engine",
+    "altherma_dhw_electric_heater": "mdi:water-boiler",
     "altherma_heating_enabled": "mdi:radiator",
     "altherma_dhw_enabled": "mdi:water-boiler",
     "altherma_quiet_mode": "mdi:volume-off",
@@ -59,6 +65,14 @@ CONFIG_SCHEMA = climate.climate_schema(DaikinClimate).extend(
                 icon=icon,
             )
             for key, icon in ALTHERMA_TEMPERATURE_SENSORS.items()
+        },
+        **{
+            cv.Optional(key): sensor.sensor_schema(
+                accuracy_decimals=0,
+                state_class=STATE_CLASS_MEASUREMENT,
+                icon=icon,
+            )
+            for key, icon in ALTHERMA_DIAGNOSTIC_SENSORS.items()
         },
         **{
             cv.Optional(key): binary_sensor.binary_sensor_schema(icon=icon)
@@ -117,6 +131,11 @@ async def to_code(config):
             cg.add(getattr(var, funcName)(sens))
 
     for key in ALTHERMA_TEMPERATURE_SENSORS:
+        if key in config:
+            sens = await sensor.new_sensor(config[key])
+            cg.add(getattr(var, "set_" + key + "_sensor")(sens))
+
+    for key in ALTHERMA_DIAGNOSTIC_SENSORS:
         if key in config:
             sens = await sensor.new_sensor(config[key])
             cg.add(getattr(var, "set_" + key + "_sensor")(sens))

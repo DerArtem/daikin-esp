@@ -69,10 +69,20 @@ climate:
     altherma_outdoor_temperature:
       name: "Altherma Außentemperatur (experimentell)"
 
+    # Observed modes 0, 1, 2 and unknown status flags: read-only diagnostics.
+    altherma_heating_control_mode_raw:
+      name: "Altherma Heizwasser Regelmodus (Rohwert)"
+      entity_category: diagnostic
+    altherma_status_flags_raw:
+      name: "Altherma Statusbyte 0x11 (Rohwert)"
+      entity_category: diagnostic
+
     altherma_circulation_pump:
       name: "Altherma Umwälzpumpe"
     altherma_compressor:
       name: "Altherma Verdichter"
+    altherma_dhw_electric_heater:
+      name: "Altherma Elektrische Brauchwasserheizung"
 
     # These are controller enable flags, not proof of an active heating cycle.
     altherma_heating_enabled:

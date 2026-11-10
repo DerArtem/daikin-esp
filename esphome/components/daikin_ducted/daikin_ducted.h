@@ -70,8 +70,12 @@ namespace esphome
          SUB_SENSOR(altherma_flow_temperature);
          SUB_SENSOR(altherma_dhw_temperature);
          SUB_SENSOR(altherma_outdoor_temperature);
+         // Raw registers retained for future backup heater stage mapping.
+         SUB_SENSOR(altherma_heating_control_mode_raw);
+         SUB_SENSOR(altherma_status_flags_raw);
          SUB_BINARY_SENSOR(altherma_circulation_pump);
          SUB_BINARY_SENSOR(altherma_compressor);
+         SUB_BINARY_SENSOR(altherma_dhw_electric_heater);
          SUB_BINARY_SENSOR(altherma_heating_enabled);
          SUB_BINARY_SENSOR(altherma_dhw_enabled);
          SUB_BINARY_SENSOR(altherma_quiet_mode);

@@ -540,7 +540,8 @@ namespace esphome
     //
     // Packet layouts verified against an EKHBH016AB6WN capture:
     // 00 00 10 (20 bytes): payload[0] heating enabled, [2] DHW enabled,
-    //                      [3] heating target, [5] cooling target,
+    //                      [3] heating target, [4] raw regulation mode,
+    //                      [5] cooling target,
     //                      [7] DHW target, [9] quiet mode.
     // 40 00 10 (24 bytes): heating target at [7], cooling at [9],
     //                      outside temperature candidate at [17,18].
@@ -548,6 +549,8 @@ namespace esphome
     // after the heating target is a mode flag, not its decimal part.
     // 40 00 11 (10 bytes): status bits at [4], DHW temperature at [5,6],
     //                      leaving water temperature at [7,8].
+    // Bit 4 (0x10) in 0x11 indicates electric DHW heater on this EKHBH.
+    // Backup heater stages 1 and 2 remain completely unassigned.
     //
     // This parser is registered ONLY when sniffer_only is true. It does
     // not acknowledge, poll, or transmit on the P1/P2 bus.
@@ -613,6 +616,12 @@ namespace esphome
           altherma_publish_temperature_(self->altherma_dhw_setpoint_sensor_,
                                         altherma_setpoint_(buffer[10]));
 
+          // At weather-compensation activation this register changed
+          // 0 -> 2, then 2 -> 1 -> 2 without an additional user action.
+          // Expose raw values, do not guess what 1 and 2 mean.
+          altherma_publish_temperature_(self->altherma_heating_control_mode_raw_sensor_,
+                                        static_cast<float>(buffer[7]));
+
           // These bits indicate controller enable/configuration states;
           // they do not prove the corresponding function is actively running.
           altherma_publish_binary_(self->altherma_heating_enabled_binary_sensor_,
@@ -644,6 +653,14 @@ namespace esphome
                                  (buffer[4] & 0x08) != 0);
         altherma_publish_binary_(self->altherma_compressor_binary_sensor_,
                                  (buffer[4] & 0x01) != 0);
+        // User confirmed electric DHW heater ran throughout capture5:
+        // 0x19 with compressor on, 0x18 after compressor off.
+        altherma_publish_binary_(self->altherma_dhw_electric_heater_binary_sensor_,
+                                 (buffer[4] & 0x10) != 0);
+
+        // Unknown bits retained raw for later heating-stage tests.
+        altherma_publish_temperature_(self->altherma_status_flags_raw_sensor_,
+                                      static_cast<float>(buffer[4]));
       }
     }
 
