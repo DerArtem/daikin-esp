@@ -69,7 +69,6 @@ CONFIG_SCHEMA = climate.climate_schema(DaikinClimate).extend(
         **{
             cv.Optional(key): sensor.sensor_schema(
                 accuracy_decimals=0,
-                state_class=STATE_CLASS_MEASUREMENT,
                 icon=icon,
             )
             for key, icon in ALTHERMA_DIAGNOSTIC_SENSORS.items()
