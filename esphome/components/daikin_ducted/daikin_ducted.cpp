@@ -3,6 +3,7 @@
 #include "p1p2_pkt.h"
 
 #include <cstring>
+#include <cmath>
 
 namespace esphome
 {
@@ -412,6 +413,10 @@ namespace esphome
     void DaikinClimate::send_simple_response(uint8_t packet_type, const uint8_t *data, size_t data_len)
     {
       uint8_t response[16] = {Direction::RESPONSE, Address::AUX_CONTROLLER, packet_type};
+      if (data_len > sizeof(response) - 4) {
+        ESP_LOGE(TAG, "Response too large: %zu bytes", data_len + 4);
+        return;
+      }
       memcpy(&response[3], data, data_len);
       response[3 + data_len] = 0xFF; // CRC placeholder
       finalize_and_send(this->homebus_, response, 3 + data_len + 1);
@@ -424,6 +429,7 @@ namespace esphome
     void DaikinClimate::callback(void *arg, const uint8_t buffer[], const uint32_t buffer_length)
     {
       DaikinClimate *self = static_cast<DaikinClimate *>(arg);
+      if (buffer_length < 4) return;  // Header and CRC must be present.
 
       // Validate CRC
       uint8_t received_crc = buffer[buffer_length - 1];
@@ -433,7 +439,7 @@ namespace esphome
       {
         ESP_LOGE(TAG, "CRC error: received 0x%02X, calculated 0x%02X (len=%lu)",
                  received_crc, calculated_crc, buffer_length);
-        ESP_LOG_BUFFER_HEXDUMP(TAG, buffer, 32, ESP_LOG_INFO);
+        ESP_LOG_BUFFER_HEXDUMP(TAG, buffer, buffer_length, ESP_LOG_INFO);
         return;
       }
 
@@ -506,20 +512,155 @@ namespace esphome
         }
 
         case PacketType::OUTDOOR_UNIT_NAME:
-          ESP_LOGI(TAG, "Outdoor unit name: %s", reinterpret_cast<const char *>(payload));
+        {
+          const int name_len = static_cast<int>(buffer_length - 4);
+          ESP_LOGI(TAG, "Outdoor unit name: %.*s", name_len, reinterpret_cast<const char *>(payload));
           self->send_simple_response(PacketType::OUTDOOR_UNIT_NAME);
           break;
+        }
 
         case PacketType::INDOOR_UNIT_NAME:
-          ESP_LOGI(TAG, "Indoor unit name: %s", reinterpret_cast<const char *>(payload));
+        {
+          const int name_len = static_cast<int>(buffer_length - 4);
+          ESP_LOGI(TAG, "Indoor unit name: %.*s", name_len, reinterpret_cast<const char *>(payload));
           self->send_simple_response(PacketType::INDOOR_UNIT_NAME);
           break;
+        }
 
         default:
           ESP_LOGVV(TAG, "Unhandled packet: dir=0x%02X addr=0x%02X type=0x%02X len=%lu",
                     direction, address, packet_type, buffer_length);
           break;
         }
+      }
+    }
+
+    // ==========================================================================
+    // Passive EKHBH / early EWYQ P1/P2 protocol decoder
+    //
+    // Packet layouts verified against an EKHBH016AB6WN capture:
+    // 00 00 10 (20 bytes): payload[0] heating enabled, [2] DHW enabled,
+    //                      [3] heating target, [4] raw regulation mode,
+    //                      [5] cooling target,
+    //                      [7] DHW target, [9] quiet mode.
+    // 40 00 10 (24 bytes): heating target at [7], cooling at [9],
+    //                      outside temperature candidate at [17,18].
+    // These setpoints are whole degrees, *not* f8/8 pairs: the byte
+    // after the heating target is a mode flag, not its decimal part.
+    // 40 00 11 (10 bytes): status bits at [4], DHW temperature at [5,6],
+    //                      leaving water temperature at [7,8].
+    // Bit 4 (0x10) in 0x11 indicates electric DHW heater on this EKHBH.
+    // Backup heater stages 1 and 2 remain completely unassigned.
+    //
+    // This parser is registered ONLY when sniffer_only is true. It does
+    // not acknowledge, poll, or transmit on the P1/P2 bus.
+    // ==========================================================================
+    static float altherma_fixed_s8_8_le_(const uint8_t *data)
+    {
+      const uint16_t value = static_cast<uint16_t>(data[0]) |
+                             (static_cast<uint16_t>(data[1]) << 8);
+      return static_cast<float>(static_cast<int16_t>(value)) / 256.0f;
+    }
+
+    // Observed target settings are whole degrees C.  The following byte
+    // may represent a distinct control mode and must not be used as tenths.
+    static float altherma_setpoint_(uint8_t whole_degrees)
+    {
+      return static_cast<float>(whole_degrees);
+    }
+
+    static void altherma_publish_temperature_(sensor::Sensor *entity, float value)
+    {
+      if (entity != nullptr &&
+          (!entity->has_state() || std::fabs(entity->state - value) >= 0.02f))
+        entity->publish_state(value);
+    }
+
+    static void altherma_publish_binary_(binary_sensor::BinarySensor *entity, bool value)
+    {
+      if (entity != nullptr && (!entity->has_state() || entity->state != value))
+        entity->publish_state(value);
+    }
+
+    void DaikinClimate::altherma_sniffer_callback(void *arg, const uint8_t buffer[],
+                                                   const uint32_t buffer_length)
+    {
+      auto *self = static_cast<DaikinClimate *>(arg);
+      // Be defensive: the physical decoder can receive invalid/partial frames.
+      if (buffer_length < 4)
+        return;
+      if (calculate_crc(buffer, buffer_length - 1) != buffer[buffer_length - 1]) {
+        ESP_LOGW(TAG, "EKHBH frame with invalid CRC ignored (len=%lu)",
+                 static_cast<unsigned long>(buffer_length));
+        return;
+      }
+
+      if (buffer[1] != 0x00)  // only the indoor unit at address 0x00
+        return;
+
+      const uint8_t direction = buffer[0];
+      const uint8_t packet_type = buffer[2];
+
+      if (packet_type == 0x10) {
+        if (direction == 0x00 && buffer_length == 20) {
+          // Read-only: controller's target settings and enable flags.
+          // Verified against seven isolated button changes in capture4:
+          // - DHW target [10]: 0x2D -> 0x32 -> 0x2D (45 -> 50 -> 45 C)
+          // - DHW enable [5]: 0x00 -> 0x01
+          // - Quiet mode [12]: 0x00 -> 0x01 -> 0x00
+          // - Heating enable [3]: 0x01 -> 0x00 -> 0x01
+          altherma_publish_temperature_(self->altherma_heating_setpoint_sensor_,
+                                        altherma_setpoint_(buffer[6]));
+          altherma_publish_temperature_(self->altherma_cooling_setpoint_sensor_,
+                                        altherma_setpoint_(buffer[8]));
+          altherma_publish_temperature_(self->altherma_dhw_setpoint_sensor_,
+                                        altherma_setpoint_(buffer[10]));
+
+          // At weather-compensation activation this register changed
+          // 0 -> 2, then 2 -> 1 -> 2 without an additional user action.
+          // Expose raw values, do not guess what 1 and 2 mean.
+          altherma_publish_temperature_(self->altherma_heating_control_mode_raw_sensor_,
+                                        static_cast<float>(buffer[7]));
+
+          // These bits indicate controller enable/configuration states;
+          // they do not prove the corresponding function is actively running.
+          altherma_publish_binary_(self->altherma_heating_enabled_binary_sensor_,
+                                   (buffer[3] & 0x01) != 0);
+          altherma_publish_binary_(self->altherma_dhw_enabled_binary_sensor_,
+                                   (buffer[5] & 0x01) != 0);
+          altherma_publish_binary_(self->altherma_quiet_mode_binary_sensor_,
+                                   (buffer[12] & 0x01) != 0);
+        } else if (direction == 0x40 && buffer_length == 24) {
+          // Corresponding indoor-unit response.
+          altherma_publish_temperature_(self->altherma_heating_setpoint_sensor_,
+                                        altherma_setpoint_(buffer[7]));
+          altherma_publish_temperature_(self->altherma_cooling_setpoint_sensor_,
+                                        altherma_setpoint_(buffer[9]));
+          // Experimental: observed 0x0532 / 256 = 5.195 C near display 5.2 C.
+          altherma_publish_temperature_(self->altherma_outdoor_temperature_sensor_,
+                                        altherma_fixed_s8_8_le_(&buffer[17]));
+        }
+      } else if (packet_type == 0x11 && direction == 0x40 && buffer_length == 10) {
+        // Confirmed vs UI: 0x23C4 / 256 = 35.77 C DHW,
+        //                  0x257C / 256 = 37.48 C leaving water.
+        altherma_publish_temperature_(self->altherma_dhw_temperature_sensor_,
+                                      altherma_fixed_s8_8_le_(&buffer[5]));
+        altherma_publish_temperature_(self->altherma_flow_temperature_sensor_,
+                                      altherma_fixed_s8_8_le_(&buffer[7]));
+        // Observed transitions: 0x08 pump on, 0x00 both off,
+        // 0x09 pump + compressor on.
+        altherma_publish_binary_(self->altherma_circulation_pump_binary_sensor_,
+                                 (buffer[4] & 0x08) != 0);
+        altherma_publish_binary_(self->altherma_compressor_binary_sensor_,
+                                 (buffer[4] & 0x01) != 0);
+        // User confirmed electric DHW heater ran throughout capture5:
+        // 0x19 with compressor on, 0x18 after compressor off.
+        altherma_publish_binary_(self->altherma_dhw_electric_heater_binary_sensor_,
+                                 (buffer[4] & 0x10) != 0);
+
+        // Unknown bits retained raw for later heating-stage tests.
+        altherma_publish_temperature_(self->altherma_status_flags_raw_sensor_,
+                                      static_cast<float>(buffer[4]));
       }
     }
 
@@ -535,7 +676,13 @@ namespace esphome
     void DaikinClimate::setup()
     {
       ESP_LOGI(TAG, "DaikinClimate::setup() starting");
-      this->homebus_.register_callback(DaikinClimate::callback, this);
+      if (!this->sniffer_only_) {
+        this->homebus_.register_callback(DaikinClimate::callback, this);
+      } else {
+        // Unlike the original Ducted callback, this parser never sends frames.
+        this->homebus_.register_callback(DaikinClimate::altherma_sniffer_callback, this);
+        ESP_LOGI(TAG, "Read-only EKHBH sniffer/decoder: CRC-checked sensors, TX disabled");
+      }
       this->homebus_.setup();
       ESP_LOGI(TAG, "DaikinClimate::setup() complete");
     }
@@ -553,6 +700,11 @@ namespace esphome
 
     void DaikinClimate::control(const climate::ClimateCall &call)
     {
+      if (this->sniffer_only_) {
+        ESP_LOGW(TAG, "Ignoring control request in read-only sniffer mode");
+        return;
+      }
+
       if (call.get_fan_mode().has_value())
       {
         this->fan_mode = *call.get_fan_mode();

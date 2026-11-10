@@ -32,9 +32,14 @@ namespace esphome
          void set_rx_pin(uint8_t pin) { this->homebus_.set_rx_pin(pin); }
          void set_tx_pin(uint8_t pin) { this->homebus_.set_tx_pin(pin); }
          void set_enable_pin(uint8_t pin) { this->homebus_.set_enable_pin(pin); }
+         void set_sniffer_only(bool enabled) {
+            this->sniffer_only_ = enabled;
+            this->homebus_.set_sniffer_only(enabled);
+         }
 
       protected:
          static void callback(void *arg, const uint8_t buffer[], const uint32_t buffer_length);
+         static void altherma_sniffer_callback(void *arg, const uint8_t buffer[], const uint32_t buffer_length);
 
          void handle_temperature_packet(const uint8_t *buffer, bool is_response);
          void handle_control_packet(const uint8_t *payload);
@@ -42,6 +47,7 @@ namespace esphome
          void send_simple_response(uint8_t packet_type);
          void send_simple_response(uint8_t packet_type, const uint8_t *data, size_t data_len);
 
+         bool sniffer_only_{true};
          HomebusRMT homebus_;
 
          bool mode_updated = false;
@@ -56,6 +62,23 @@ namespace esphome
          SUB_SENSOR(indoor_temperature);
          SUB_SENSOR(outdoor_intake_temperature);
          SUB_SENSOR(coolant_temperature);
+
+         // Read-only EKHBH/EWYQ monitor entities. Separate from ducted AC controls.
+         SUB_SENSOR(altherma_heating_setpoint);
+         SUB_SENSOR(altherma_dhw_setpoint);
+         SUB_SENSOR(altherma_cooling_setpoint);
+         SUB_SENSOR(altherma_flow_temperature);
+         SUB_SENSOR(altherma_dhw_temperature);
+         SUB_SENSOR(altherma_outdoor_temperature);
+         // Raw registers retained for future backup heater stage mapping.
+         SUB_SENSOR(altherma_heating_control_mode_raw);
+         SUB_SENSOR(altherma_status_flags_raw);
+         SUB_BINARY_SENSOR(altherma_circulation_pump);
+         SUB_BINARY_SENSOR(altherma_compressor);
+         SUB_BINARY_SENSOR(altherma_dhw_electric_heater);
+         SUB_BINARY_SENSOR(altherma_heating_enabled);
+         SUB_BINARY_SENSOR(altherma_dhw_enabled);
+         SUB_BINARY_SENSOR(altherma_quiet_mode);
 
          SUB_BINARY_SENSOR(filter_clean);
       };

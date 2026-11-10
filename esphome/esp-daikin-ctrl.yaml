@@ -3,21 +3,22 @@ esphome:
   friendly_name: "ESP32 WiFi Daikin Controller"
   name_add_mac_suffix: True
 
-  platformio_options:
-    board_build.flash_mode: dio
-
 esp32:
   variant: esp32c6
+  flash_mode: dio
   framework:
     type: esp-idf
+    advanced:
+      flash_chip: generic
 
 logger:
-  level: VERY_VERBOSE
+  level: DEBUG
   hardware_uart: USB_SERIAL_JTAG
   baud_rate: 115200
   logs:
-    homebus: VERY_VERBOSE
-    daikin_ducted.climate: VERY_VERBOSE
+    p1p2_sniffer: INFO
+    homebus: INFO
+    daikin_ducted.climate: INFO
     wifi: INFO
     api: INFO
 
@@ -43,39 +44,57 @@ external_components:
 status_led:
     pin: GPIO18
 
+# Internal carrier for a passive P1/P2 bus monitor; it is NOT a controllable climate.
+# The following sensors are exposed separately to Home Assistant.
 climate:
   - platform: daikin_ducted
     id: daikin0
-    name: "Ducted AC"
+    name: "Altherma Protocol Monitor"
+    internal: true
 
-    # P1P2/Homebus interface
-    rx_pin:          # RX from MAX22088
-      number: 4
-      ignore_strapping_warning: true
-    tx_pin: 5        # TX to MAX22088
-    enable_pin: 8    # TX enable
+    rx_pin: 4       # MAX22088 DOUT
+    tx_pin: 5       # MAX22088 DIN, never used in this mode
+    enable_pin: 8   # MAX22088 RST; HIGH disables bus transmitter
+    sniffer_only: true
 
-    homekit_climate:
-      name: "Ducted AC HomeKit"
+    # EKHBH016AB6WN / older EWYQ-profile (passive readback).
+    altherma_heating_setpoint:
+      name: "Altherma Heizwasser Solltemperatur"
+    altherma_flow_temperature:
+      name: "Altherma Vorlauftemperatur"
+    altherma_dhw_temperature:
+      name: "Altherma Brauchwassertemperatur"
+    altherma_dhw_setpoint:
+      name: "Altherma Brauchwasser Solltemperatur"
+    altherma_outdoor_temperature:
+      name: "Altherma Außentemperatur (experimentell)"
 
-    homekit_fan:
-      name: "Ducted AC Fan"
+    # Observed modes 0, 1, 2 and unknown status flags: read-only diagnostics.
+    altherma_heating_control_mode_raw:
+      name: "Altherma Heizwasser Regelmodus (Rohwert)"
+      entity_category: diagnostic
+    altherma_status_flags_raw:
+      name: "Altherma Statusbyte 0x11 (Rohwert)"
+      entity_category: diagnostic
 
-    outdoor_intake_temperature:
-      name: "Outdoor Intake Temperature"
-      filters:
-        - throttle_average: 60s
-    coolant_temperature:
-      name: "Coolant Temperature"
-      filters:
-        - throttle_average: 60s
-    indoor_temperature:
-      name: "Indoor Temperature"
-      filters:
-        - throttle_average: 60s
-      
-    filter_clean:
-      name: "Filter Status"
+    altherma_circulation_pump:
+      name: "Altherma Umwälzpumpe"
+    altherma_compressor:
+      name: "Altherma Verdichter"
+    altherma_dhw_electric_heater:
+      name: "Altherma Elektrische Brauchwasserheizung"
+
+    # These are controller enable flags, not proof of an active heating cycle.
+    altherma_heating_enabled:
+      name: "Altherma Heizbetrieb freigegeben"
+    altherma_dhw_enabled:
+      name: "Altherma Brauchwasserbereitung freigegeben"
+    altherma_quiet_mode:
+      name: "Altherma Flüstermodus"
+
+    # Optionally enable if cooling is supported:
+    # altherma_cooling_setpoint:
+    #   name: "Altherma Kühlwasser Solltemperatur"
 
 text_sensor:
   - platform: git_ref

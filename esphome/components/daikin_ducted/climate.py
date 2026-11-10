@@ -17,6 +17,31 @@ CONF_FILTER_CLEAN = "filter_clean"
 CONF_RX_PIN = "rx_pin"
 CONF_TX_PIN = "tx_pin"
 CONF_ENABLE_PIN = "enable_pin"
+CONF_SNIFFER_ONLY = "sniffer_only"
+
+# Observed EKHBH/EWYQ packet profile (read-only).
+ALTHERMA_TEMPERATURE_SENSORS = {
+    "altherma_heating_setpoint": "mdi:thermometer-chevron-up",
+    "altherma_dhw_setpoint": "mdi:water-thermometer",
+    "altherma_cooling_setpoint": "mdi:thermometer-chevron-down",
+    "altherma_flow_temperature": "mdi:thermometer-water",
+    "altherma_dhw_temperature": "mdi:water-thermometer",
+    "altherma_outdoor_temperature": "mdi:thermometer",
+}
+# Numeric raw diagnostic bytes: not decoded modes or heater-stage states.
+ALTHERMA_DIAGNOSTIC_SENSORS = {
+    "altherma_heating_control_mode_raw": "mdi:weather-partly-cloudy",
+    "altherma_status_flags_raw": "mdi:code-braces",
+}
+ALTHERMA_BINARY_SENSORS = {
+    "altherma_circulation_pump": "mdi:water-pump",
+    "altherma_compressor": "mdi:engine",
+    "altherma_dhw_electric_heater": "mdi:water-boiler",
+    "altherma_heating_enabled": "mdi:radiator",
+    "altherma_dhw_enabled": "mdi:water-boiler",
+    "altherma_quiet_mode": "mdi:volume-off",
+}
+
 
 AUTO_LOAD = ["binary_sensor", "climate", "fan", "sensor"]
 
@@ -30,6 +55,28 @@ CONFIG_SCHEMA = climate.climate_schema(DaikinClimate).extend(
         cv.Optional(CONF_RX_PIN, default=2): pins.internal_gpio_input_pin_number,
         cv.Optional(CONF_TX_PIN, default=3): pins.internal_gpio_output_pin_number,
         cv.Optional(CONF_ENABLE_PIN, default=10): pins.internal_gpio_output_pin_number,
+        cv.Optional(CONF_SNIFFER_ONLY, default=True): cv.boolean,
+        **{
+            cv.Optional(key): sensor.sensor_schema(
+                unit_of_measurement=UNIT_CELSIUS,
+                accuracy_decimals=1,
+                device_class=DEVICE_CLASS_TEMPERATURE,
+                state_class=STATE_CLASS_MEASUREMENT,
+                icon=icon,
+            )
+            for key, icon in ALTHERMA_TEMPERATURE_SENSORS.items()
+        },
+        **{
+            cv.Optional(key): sensor.sensor_schema(
+                accuracy_decimals=0,
+                icon=icon,
+            )
+            for key, icon in ALTHERMA_DIAGNOSTIC_SENSORS.items()
+        },
+        **{
+            cv.Optional(key): binary_sensor.binary_sensor_schema(icon=icon)
+            for key, icon in ALTHERMA_BINARY_SENSORS.items()
+        },
         cv.Optional("outdoor_intake_temperature"): sensor.sensor_schema(
             unit_of_measurement=UNIT_CELSIUS,
             icon=ICON_THERMOMETER,
@@ -75,11 +122,27 @@ async def to_code(config):
     cg.add(var.set_rx_pin(config[CONF_RX_PIN]))
     cg.add(var.set_tx_pin(config[CONF_TX_PIN]))
     cg.add(var.set_enable_pin(config[CONF_ENABLE_PIN]))
+    cg.add(var.set_sniffer_only(config[CONF_SNIFFER_ONLY]))
 
     for key, funcName in SENSOR_TYPES.items():
         if key in config:
             sens = await sensor.new_sensor(config[key])
             cg.add(getattr(var, funcName)(sens))
+
+    for key in ALTHERMA_TEMPERATURE_SENSORS:
+        if key in config:
+            sens = await sensor.new_sensor(config[key])
+            cg.add(getattr(var, "set_" + key + "_sensor")(sens))
+
+    for key in ALTHERMA_DIAGNOSTIC_SENSORS:
+        if key in config:
+            sens = await sensor.new_sensor(config[key])
+            cg.add(getattr(var, "set_" + key + "_sensor")(sens))
+
+    for key in ALTHERMA_BINARY_SENSORS:
+        if key in config:
+            bsens = await binary_sensor.new_binary_sensor(config[key])
+            cg.add(getattr(var, "set_" + key + "_binary_sensor")(bsens))
 
     if CONF_FILTER_CLEAN in config:
         sens = await binary_sensor.new_binary_sensor(config[CONF_FILTER_CLEAN])
