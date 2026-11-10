@@ -26,6 +26,9 @@ This branch implements **passive P1/P2 reception and a first ESPHome sensor deco
 | `altherma_outdoor_temperature` | Outside temperature | `40 00 10`, bytes 17-18 | Experimental: 5.195 C vs display ~5.2 C |
 | `altherma_circulation_pump` | Water circulation pump running | `40 00 11`, byte 4 bit 3 | Correlated with pump off/on at 23:09:56 / 23:10:58 |
 | `altherma_compressor` | Compressor running | `40 00 11`, byte 4 bit 0 | Correlated with compressor start ~23:10:58 |
+| `altherma_dhw_electric_heater` | Electric DHW heater active | `40 00 11`, byte 4 bit 4 (0x10) | Confirmed by capture5 user observation and 0x19 -> 0x18 when compressor stopped |
+| `altherma_heating_control_mode_raw` | Heating control/regulation byte (raw) | `00 00 10`, payload byte 4 | 0 -> 2 at weather-compensation enable; then 2 -> 1 -> 2. Meanings of 1/2 unknown |
+| `altherma_status_flags_raw` | Full raw 0x11 status byte (decimal 0–255) | `40 00 11`, byte 4 | Useful for future tests; do NOT assign unknown bits to backup heater stages |
 | `altherma_cooling_setpoint` | Cooling water target (optional) | `00 00 10` / `40 00 10` | Not independently checked; disabled in example |
 
 The `Daikin Ducted` climate entity is now `internal: true` in the example: it is an implementation container only, **not a usable thermostat**. Old Ducted/HomeKit entities and their unrelated temperature data have been removed from the example YAML.
@@ -35,7 +38,7 @@ The `Daikin Ducted` climate entity is now `internal: true` in the example: it is
 - **Accepted only after matching CRC:** reflected CRC-8, polynomial `0xD9`, initial value 0, as already used by the driver.
 - **Strict lengths:** `00 00 10` must be 20 bytes; `40 00 10` 24 bytes; `40 00 11` 10 bytes. Other traffic is still available in the raw log, but is not decoded.
 - **Temperature encoding:** flow, DHW, outdoor candidate: signed *little-endian* 16-bit / 256. Heating and DHW targets: whole-degree byte, **not** tenths in the next byte (the byte after heating target is a distinct controller mode field). CRC occupies the final byte and is not part of the payload.
-- **Binary status:** `0x08` = pump ON, compressor OFF; `0x00` = both OFF; `0x09` = pump + compressor ON in this observed unit.
+- **Binary status:** `0x08` = pump ON, compressor OFF; `0x00` = both OFF; `0x09` = pump + compressor ON with electric DHW heater OFF. `0x19`/`0x18` = electric DHW heater ON, with compressor ON/OFF respectively.
 - Numeric entities publish on first valid update or meaningful change (at least 0.02 degrees C), rather than on every ~0.3 s frame. Binary sensors publish only on state changes.
 
 ### Seven confirmed control-panel actions (November 9, 2026)
@@ -53,6 +56,36 @@ The latest capture (`p1p2-capture4.txt`) contains 3,705 CRC-valid frames over 23
 | 23:55:03.724 | Space heating enabled | 0, `00 -> 01` |
 
 These flags indicate **controller settings / permission**, not necessarily actual pump, compressor, space-heating, or DHW activity. In the observed capture the compressor continued running while space heating was temporarily disabled, with DHW still permitted.
+
+### Capture 5: electric DHW heater and weather compensation (November 10, 2026)
+
+In `p1p2-capture5.txt` (01:03:19–01:04:33), all 1,414 decoded frames
+had valid CRC and their `seq` field showed no gaps. The user confirms
+the **electric domestic-hot-water heater was ON from before the recording
+until after the recording ended**, and that the compressor really stopped.
+
+- Older recordings had status `0x09` with electric DHW heating OFF.
+- All 265 `40 00 11` replies in capture5 had `0x10` status bit set:
+  189 with `0x19` (pump + compressor + electric DHW heater)
+  followed by 76 with `0x18` (pump + electric DHW heater, compressor OFF).
+- `0x19 XOR 0x18 = 0x01`: the compressor bit changed independently of
+  the electric heater bit. This supports **bit 4** as an electric DHW
+  heater activity indicator on this specific device.
+- Weather compensation was enabled at 01:04:07.234. The original
+  controller's `00 00 10` request then changed the heating target
+  `0x2D -> 0x24` (45 -> 36 C) and payload byte 4 `0x00 -> 0x02`.
+  The same two values appear in the following `40 00 10` response.
+- Without another reported UI action, payload byte 4 changed
+  `0x02 -> 0x01` at 01:04:24.584 and `0x01 -> 0x02`
+  at 01:04:32.735. Thus `1` and `2` are **not** labeled simply
+  as weather-compensation OFF/ON. They remain raw values in HA.
+- The main space-heating backup heater **stage 1** and **stage 2** were
+  never toggled or observed. No stage-specific status bits are claimed
+  or exposed. `altherma_status_flags_raw` is an optional diagnostic
+  foundation for later experiments.
+
+`sniffer_only: true` remains mandatory. All three new entities only
+publish observed, CRC-validated data; none sends commands.
 
 ### Validation captures
 
@@ -147,6 +180,8 @@ During boot, check that the driver logs `READ-ONLY SNIFFER: MAX22088 RST held HI
 - This experimental profile is based on a small number of tests on **one EKHBH016AB6WN**. Other old Daikin models may have different field positions, status bits, or scaling.
 - `altherma_outdoor_temperature` is a **candidate** until verified at matching timestamps during further measurements.
 - `altherma_dhw_temperature` and `altherma_flow_temperature` were matched against one display reading; more independent comparisons are advisable.
+- Space-heating electric backup heater stages 1 and 2 have not been observed or decoded. No speculative status bits are published for them.
+- Raw heating control values 1 and 2 are not yet understood; the diagnostic sensor is intentionally numeric, not a binary weather-compensation indicator.
 - No return water temperature mapping is established. No validated EKHBH P1/P2 writing or control is implemented. The dormant active TX transport is not suitable for operation on this older device.
 - The four controller settings above are **read-only sensors** (not ESPHome switches). Changing these settings through Home Assistant remains unsupported and intentionally disabled.
 - The raw sniffer prints decoded bytes even if their CRC is bad; **the new HA decoder discards CRC-invalid frames**. Raw log transport can lag/drop under heavy load. Watch for RMT overflow warnings.
