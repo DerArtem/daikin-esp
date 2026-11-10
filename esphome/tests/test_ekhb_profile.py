@@ -115,6 +115,71 @@ class EKHBHProfileFixturesTest(unittest.TestCase):
             actual = decoded(frame)
             self.assertEqual(tuple(actual.values()), expected)
 
+    def test_electric_dhw_heater_bit_is_independent_of_compressor(self):
+        # In capture3/capture4 the electric heater was OFF (0x09).
+        # In capture5 the user confirmed electric DHW heating throughout:
+        # 0x19 while compressor ON, 0x18 after compressor stopped.
+        earlier = valid_frame(
+            "40 00 11 07 09 c4 23 fc 24 3a", "40 00 11", 10,
+        )
+        heater_and_compressor = valid_frame(
+            "40 00 11 07 19 88 2d d4 2c e4", "40 00 11", 10,
+        )
+        heater_without_compressor = valid_frame(
+            "40 00 11 07 18 88 2d d4 2c 29", "40 00 11", 10,
+        )
+        flags = [frame[4] for frame in
+                 (earlier, heater_and_compressor, heater_without_compressor)]
+        self.assertEqual(flags, [0x09, 0x19, 0x18])
+        self.assertEqual(flags[0] & 0x10, 0)
+        self.assertEqual(flags[1] & 0x10, 0x10)
+        self.assertEqual(flags[2] & 0x10, 0x10)
+        self.assertEqual(flags[1] ^ flags[2], 0x01)
+        self.assertEqual([bool(value & 0x08) for value in flags],
+                         [True, True, True])
+        # These observations do not identify the main heating backup
+        # electric heater Stage 1 or Stage 2 bits.
+
+    def test_weather_compensation_raw_modes_from_capture5(self):
+        # Three distinct valid requests, all from the original controller:
+        # Initially fixed target 45, then weather compensation target 36.
+        # Raw mode 2 -> 1 -> 2 occurred without another user action.
+        before = valid_frame(
+            "00 00 10 01 01 01 2d 00 07 00 2d 00 00 00 00 00 00 46 0a 27",
+            "00 00 10", 20,
+        )
+        weather_mode_2 = valid_frame(
+            "00 00 10 01 01 01 24 02 07 00 2d 00 00 00 00 00 00 46 0a bc",
+            "00 00 10", 20,
+        )
+        weather_mode_1 = valid_frame(
+            "00 00 10 01 01 01 24 01 07 00 2d 00 00 00 00 00 00 46 0a 2f",
+            "00 00 10", 20,
+        )
+        observed = (before, weather_mode_2, weather_mode_1, weather_mode_2)
+        self.assertEqual([frame[7] for frame in observed], [0, 2, 1, 2])
+        self.assertEqual([frame[6] for frame in observed], [45, 36, 36, 36])
+        # Index 7 is a mode byte, never the fractional part of target 36.
+        self.assertEqual(float(weather_mode_2[6]), 36.0)
+
+    def test_weather_mode_response_echo(self):
+        response_0 = valid_frame(
+            "40 00 10 01 00 01 01 2d 00 07 00 00 00 00 00 00 00 b6 04 00 1f 01 a3 30",
+            "40 00 10", 24,
+        )
+        response_2 = valid_frame(
+            "40 00 10 01 00 01 01 24 02 07 00 00 00 00 00 00 00 a2 04 00 1f 01 a3 98",
+            "40 00 10", 24,
+        )
+        response_1 = valid_frame(
+            "40 00 10 01 00 01 01 24 01 07 00 00 00 00 00 00 00 b6 04 00 1f 01 a3 6d",
+            "40 00 10", 24,
+        )
+        self.assertEqual([frame[8] for frame in
+                          (response_0, response_2, response_1)], [0, 2, 1])
+        self.assertEqual([frame[7] for frame in
+                          (response_0, response_2, response_1)], [45, 36, 36])
+
     def test_heating_target_mode_byte_is_not_decimal_fraction(self):
         # In the EWYQ-like profile payload byte 4 belongs to controller mode.
         # A 0x05 mode byte must not turn a 45 C setpoint into 45.5 C.
